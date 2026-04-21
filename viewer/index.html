@@ -10,12 +10,54 @@
     <header id="app-header">
       <div class="brand">open-designer</div>
       <div class="meta">
-        <span id="draft-count">0 drafts</span>
-        <button id="refresh-btn" type="button">Refresh</button>
+        <span id="project-label"></span>
+        <button id="picker-toggle" type="button" role="switch" aria-checked="false" title="Toggle element selection (Ctrl+Shift+K)">
+          <span class="switch-label">Select Elements</span>
+          <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+        </button>
+        <button id="tweaks-toggle" type="button" role="switch" aria-checked="false" title="Toggle tweaks panel">
+          <span class="switch-label">Tweaks</span>
+          <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+        </button>
+        <button id="refresh-btn" type="button" title="Reload drafts">Refresh</button>
       </div>
     </header>
-    <main id="grid"></main>
-    <div id="picker-root"></div>
+    <main id="stage">
+      <iframe id="draft-frame" loading="eager"></iframe>
+      <div id="empty-state" class="empty" hidden>
+        <div class="empty-card">
+          <h1>No drafts yet</h1>
+          <p>open-designer is a local design loop. Claude writes HTML drafts, you click elements to iterate – no cloud canvas, no backend.</p>
+          <ol>
+            <li>Ask Claude to design a page or component. Describe what you want.</li>
+            <li>Drafts appear here automatically as Claude saves them.</li>
+            <li>Toggle <strong>Select Elements</strong>, click what you want changed, type your feedback, paste the copied Markdown back into Claude.</li>
+          </ol>
+          <p class="empty-foot">Drafts live under <code>.open-designer/drafts/&lt;project&gt;/</code>. This tab auto-refreshes when files change.</p>
+        </div>
+      </div>
+    </main>
+    <aside id="tweaks-panel" hidden>
+      <header>
+        <span>Tweaks</span>
+        <button id="tweaks-close" type="button" aria-label="Close tweaks panel">×</button>
+      </header>
+      <div id="tweaks-body"></div>
+    </aside>
+    <section id="composer" hidden>
+      <header>
+        <span>Selected elements <span id="composer-count"></span></span>
+      </header>
+      <div id="composer-chips" role="list"></div>
+      <div id="composer-actions">
+        <textarea id="composer-input" placeholder="What should change about these elements?" rows="3"></textarea>
+        <div class="composer-buttons">
+          <button id="composer-clear" type="button">Clear</button>
+          <button id="composer-copy" type="button" class="primary">Copy</button>
+        </div>
+      </div>
+    </section>
+    <div id="toast-root" aria-live="polite"></div>
     <script type="module" src="./src/main.ts"></script>
   </body>
 </html>

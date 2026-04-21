@@ -42,20 +42,70 @@ For each design request:
 2. Trace the imports of the target page or component to load the relevant context. Stop at framework boundaries.
 3. Write `00-current.html` – a pixel-perfect replica of the current state. This anchors the loop. If there is no current state, skip this file and start at `01-`.
 4. Write 2 to 4 variants as `01-*.html`, `02-*.html`, etc. Use short slug names (`01-tighter-spacing.html`, `02-amber-cta.html`).
-5. Each draft is a single self-contained HTML file – styles inline, no external assets beyond CDN-safe URLs the user already uses (e.g. existing font CDNs). Same `<head>` skeleton across drafts so the viewer can swap them.
-6. Write `.open-designer/drafts/<project>/index.json`:
+5. Each draft is a single self-contained HTML file. Styles inline, no external assets beyond CDN-safe URLs the user already uses. Same `<head>` skeleton across drafts so the viewer can swap them. The viewer injects `html, body { min-height: 100vh }` at load time, so the body's background colour always fills the frame regardless of content height – do not rely on a short body.
+6. **Drive the design off CSS variables.** Anything you expect the user might want to adjust – colors, spacing, radii, font sizes, shadow depth, a variant knob that flips a section's layout – goes through a CSS custom property declared on `:root`. The viewer binds tweak controls directly to those variables, so live adjustment "just works" when the draft is built this way. Example:
+
+   ```html
+   <style>
+     :root {
+       --cta-bg: #111827;
+       --cta-padding: 16px 36px;
+       --hero-bg: linear-gradient(180deg, #f9fafb 0%, #ffffff 100%);
+     }
+     .hero-cta { background: var(--cta-bg); padding: var(--cta-padding); }
+     .hero { background: var(--hero-bg); }
+   </style>
+   ```
+
+7. Write `.open-designer/drafts/<project>/index.json`. Each draft may declare `tweaks` – typed controls the user can adjust in the viewer. Project-level `tweaks` apply to every variant.
 
    ```json
    {
      "project": "library-modal",
      "updated": "2026-04-21T15:00:00Z",
+     "tweaks": [
+       {
+         "id": "section-pad",
+         "type": "slider",
+         "label": "Section padding",
+         "target": "--section-pad",
+         "min": 32, "max": 120, "step": 4, "unit": "px",
+         "default": 72
+       }
+     ],
      "drafts": [
-       { "id": "00-current", "file": "00-current.html", "label": "Current" },
-       { "id": "01-tighter", "file": "01-tighter-spacing.html", "label": "Tighter spacing" },
-       { "id": "02-amber-cta", "file": "02-amber-cta.html", "label": "Amber CTA" }
+       {
+         "id": "01-tighter",
+         "file": "01-tighter-spacing.html",
+         "label": "Tighter spacing",
+         "tweaks": [
+           {
+             "id": "cta-bg",
+             "type": "color",
+             "label": "CTA background",
+             "target": "--cta-bg",
+             "default": "#111827"
+           },
+           {
+             "id": "hero-bg",
+             "type": "select",
+             "label": "Hero background",
+             "target": "--hero-bg",
+             "options": [
+               { "label": "Solid", "value": "#0f172a" },
+               { "label": "Gradient", "value": "linear-gradient(180deg, #1e293b 0%, #0f172a 100%)" }
+             ],
+             "default": "#0f172a"
+           }
+         ]
+       }
      ]
    }
    ```
+
+   Tweak types: `slider` (min, max, step, unit), `color` (hex), `select` (options as strings or `{label, value}`), `toggle` (`on`/`off` values), `text`.
+
+   The `target` is the CSS variable the control writes to. Keep variants as separate HTML files for structural differences; use tweaks for parametric adjustments.
 
 7. Tell the user how to launch the viewer:
 
@@ -77,38 +127,58 @@ This rule is the single biggest difference between a useful design draft and a h
 
 ## Iterating from a pasted selection
 
-When the user pastes a block that looks like:
+The viewer produces two payload shapes. Recognize both.
+
+**Single-element** (starts with `I selected an element in draft`):
 
 ```
-I selected an element in draft `01-tighter-spacing.html`.
+I selected an element in draft `01-tighter-spacing.html` (project `library-modal`).
 
 Element selector: `.hero-cta`
 Bounding box: 320x80 at (40, 120)
 
-Outer HTML:
-​```html
-<button class="hero-cta" data-variant="primary">Book demo</button>
-​```
-
-Key computed styles:
-- padding: 12px 24px
-- font-family: Inter, sans-serif
-- ...
+Outer HTML: …
+Key computed styles: …
 
 My request:
 Make the padding tighter and use the amber brand gradient instead.
 ```
 
-Do this:
+**Multi-element** (starts with `I selected N elements in draft`):
+
+```
+I selected 3 elements in draft `01-tighter-spacing.html` (project `library-modal`).
+
+Shared request:
+Tighten the hero – less padding on both the CTA and the feature cards, and raise the h1 weight.
+
+Elements:
+
+1. `[data-testid="hero-cta"]`
+   Bounding box: …
+   Outer HTML: …
+   Key computed styles: …
+
+2. `article.feature:nth-of-type(1)`
+   …
+
+3. `h1[data-testid="hero-title"]`
+   …
+```
+
+Payloads may also include `Active tweaks: tweak-id=value, …` – the tweak state at the time of selection. Treat it as context, not a command.
+
+To apply either shape:
 
 1. Locate the named draft under `.open-designer/drafts/<project>/`.
-2. Find the element by selector. If the selector is ambiguous, fall back to the outer HTML snippet.
-3. Re-read `.open-designer/design-system.md`. Apply the request using only allowed tokens.
-4. Edit the draft in place. Keep the rest of the file unchanged.
-5. Bump the `updated` timestamp in `index.json`.
-6. Tell the user one line: which draft you edited and what changed. Do not repeat the prompt back.
+2. For each element in the payload, find it by selector. If ambiguous, fall back to the outer HTML snippet.
+3. Re-read `.open-designer/design-system.md`. Apply the shared request to every selected element (or the single request to the single element), using only allowed tokens.
+4. If the change is parametric and the element already binds to a CSS variable, prefer adjusting the variable's default in `<style>:root` rather than rewriting the rule. If the change needs a new control, add a tweak entry to `index.json` for this draft.
+5. Edit the draft in place. Keep the rest of the file unchanged.
+6. Bump the `updated` timestamp in `index.json`.
+7. Tell the user one line: which draft you edited and what changed. Do not repeat the prompt back.
 
-If the request needs a new variant rather than an in-place edit, write a new `NN-*.html` and update `index.json`.
+If the request needs a new variant rather than an in-place edit, write a new `NN-*.html`, add its `drafts` entry to `index.json`, and copy over relevant tweaks.
 
 ## Approve and ship
 

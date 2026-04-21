@@ -1,19 +1,12 @@
-// Element picker overlay. Injected into each iframe that loads a draft.
-// All logic written from scratch – do not import or paste from any
-// AGPL-licensed source.
+// Multi-select element picker for open-designer. Written from scratch under MIT.
+// Do not import or copy any code from AGPL-licensed sources.
 
-import { buildPayload, type SelectionContext } from "./clipboard";
+import type { SelectionSnapshot } from "./types";
 
-interface ActiveSelection {
-  iframe: HTMLIFrameElement;
-  project: string;
-  file: string;
-  element: HTMLElement;
-  selector: string;
-  rect: DOMRect;
-  outerHTML: string;
-  styles: Record<string, string>;
-}
+const STYLE_ID = "od-picker-style";
+const HOVER_ID = "od-picker-hover";
+const SELECTED_ATTR = "data-od-selected";
+const SELECTED_BADGE_CLASS = "od-picker-badge";
 
 const STYLE_KEYS = [
   "display",
@@ -43,181 +36,279 @@ const STYLE_KEYS = [
   "grid-template-rows",
 ];
 
-const HOVER_OUTLINE_STYLE_ID = "od-overlay-style";
-const HOVER_BOX_ID = "od-hover-box";
-const HOVER_LABEL_ID = "od-hover-label";
+export const MAX_SELECTIONS = 20;
 
-let panelEl: HTMLElement | null = null;
-let activeSelection: ActiveSelection | null = null;
-let toastTimer: number | null = null;
+type SelectionListener = (selections: SelectionSnapshot[]) => void;
 
-export function attachPicker(iframe: HTMLIFrameElement, project: string, file: string): void {
-  const doc = iframe.contentDocument;
-  if (!doc) return; // cross-origin – not expected, drafts share the launcher origin
-  injectIframeStyles(doc);
-  ensureHoverChrome(doc);
-
-  doc.addEventListener("mousemove", (e) => onIframeMouseMove(e, doc));
-  doc.addEventListener("mouseleave", () => clearHoverChrome(doc));
-  doc.addEventListener(
-    "click",
-    (e) => {
-      onIframeClick(e, iframe, project, file);
-    },
-    true,
-  );
-  // Suppress link/button activation while picking.
-  doc.addEventListener(
-    "submit",
-    (e) => {
-      e.preventDefault();
-    },
-    true,
-  );
-}
-
-function injectIframeStyles(doc: Document): void {
-  if (doc.getElementById(HOVER_OUTLINE_STYLE_ID)) return;
-  const style = doc.createElement("style");
-  style.id = HOVER_OUTLINE_STYLE_ID;
-  style.textContent = `
-    #${HOVER_BOX_ID} {
-      position: fixed;
-      pointer-events: none;
-      border: 2px solid #f59e0b;
-      background: rgba(245, 158, 11, 0.08);
-      z-index: 2147483646;
-      transition: all 60ms ease-out;
-      display: none;
-    }
-    #${HOVER_LABEL_ID} {
-      position: fixed;
-      pointer-events: none;
-      background: #f59e0b;
-      color: #1f1300;
-      font: 11px ui-sans-serif, system-ui, sans-serif;
-      padding: 2px 6px;
-      border-radius: 4px;
-      z-index: 2147483647;
-      display: none;
-    }
-    #${HOVER_BOX_ID}.frozen {
-      border-style: dashed;
-      background: rgba(245, 158, 11, 0.15);
-    }
-  `;
-  doc.head.appendChild(style);
-}
-
-function ensureHoverChrome(doc: Document): void {
-  if (!doc.getElementById(HOVER_BOX_ID)) {
-    const box = doc.createElement("div");
-    box.id = HOVER_BOX_ID;
-    doc.body.appendChild(box);
-  }
-  if (!doc.getElementById(HOVER_LABEL_ID)) {
-    const label = doc.createElement("div");
-    label.id = HOVER_LABEL_ID;
-    doc.body.appendChild(label);
-  }
-}
-
-function clearHoverChrome(doc: Document): void {
-  const box = doc.getElementById(HOVER_BOX_ID);
-  const label = doc.getElementById(HOVER_LABEL_ID);
-  if (box && !box.classList.contains("frozen")) box.style.display = "none";
-  if (label) label.style.display = "none";
-}
-
-function onIframeMouseMove(e: MouseEvent, doc: Document): void {
-  const target = e.target as HTMLElement | null;
-  if (!target || target.id === HOVER_BOX_ID || target.id === HOVER_LABEL_ID) return;
-  if (activeSelection) return; // freeze on selection
-  const rect = target.getBoundingClientRect();
-  const box = doc.getElementById(HOVER_BOX_ID)!;
-  const label = doc.getElementById(HOVER_LABEL_ID)!;
-  box.style.display = "block";
-  box.style.top = `${rect.top}px`;
-  box.style.left = `${rect.left}px`;
-  box.style.width = `${rect.width}px`;
-  box.style.height = `${rect.height}px`;
-  label.style.display = "block";
-  label.style.top = `${Math.max(rect.top - 20, 4)}px`;
-  label.style.left = `${rect.left}px`;
-  label.textContent = describe(target);
-}
-
-function describe(el: HTMLElement): string {
-  const tag = el.tagName.toLowerCase();
-  if (el.dataset.testid) return `${tag}[data-testid="${el.dataset.testid}"]`;
-  if (el.id) return `${tag}#${el.id}`;
-  if (el.className && typeof el.className === "string") {
-    const first = el.className.trim().split(/\s+/)[0];
-    if (first) return `${tag}.${first}`;
-  }
-  return tag;
-}
-
-function onIframeClick(
-  e: MouseEvent,
-  iframe: HTMLIFrameElement,
-  project: string,
-  file: string,
-): void {
-  const target = e.target as HTMLElement | null;
-  if (!target) return;
-  if (target.id === HOVER_BOX_ID || target.id === HOVER_LABEL_ID) return;
-
-  e.preventDefault();
-  e.stopPropagation();
-
-  const doc = iframe.contentDocument!;
-  const rect = target.getBoundingClientRect();
-  const selector = computeSelector(target);
-  const styles = collectStyles(target, doc);
-  const outerHTML = target.outerHTML ?? "";
-
-  activeSelection = {
-    iframe,
-    project,
-    file,
-    element: target,
-    selector,
-    rect,
-    outerHTML,
-    styles,
+interface AttachedState {
+  iframe: HTMLIFrameElement;
+  doc: Document;
+  hover: HTMLElement | null;
+  handlers: {
+    mousemove: (e: MouseEvent) => void;
+    mouseleave: () => void;
+    click: (e: MouseEvent) => void;
+    keydown: (e: KeyboardEvent) => void;
   };
-
-  freezeHoverBox(doc, rect);
-  showPanel(activeSelection);
 }
 
-function freezeHoverBox(doc: Document, rect: DOMRect): void {
-  const box = doc.getElementById(HOVER_BOX_ID);
-  const label = doc.getElementById(HOVER_LABEL_ID);
-  if (box) {
-    box.classList.add("frozen");
-    box.style.top = `${rect.top}px`;
-    box.style.left = `${rect.left}px`;
-    box.style.width = `${rect.width}px`;
-    box.style.height = `${rect.height}px`;
+export class Picker {
+  private enabled = false;
+  private selections: SelectionSnapshot[] = [];
+  private nextId = 1;
+  private listeners = new Set<SelectionListener>();
+  private attached: AttachedState | null = null;
+  private limitExceededListener: (() => void) | null = null;
+
+  isEnabled(): boolean {
+    return this.enabled;
   }
-  if (label) label.style.display = "none";
-}
 
-function clearFrozenBox(): void {
-  if (!activeSelection) return;
-  const doc = activeSelection.iframe.contentDocument;
-  if (!doc) return;
-  const box = doc.getElementById(HOVER_BOX_ID);
-  if (box) {
-    box.classList.remove("frozen");
-    box.style.display = "none";
+  getSelections(): SelectionSnapshot[] {
+    return [...this.selections];
+  }
+
+  onChange(listener: SelectionListener): () => void {
+    this.listeners.add(listener);
+    listener(this.getSelections());
+    return () => this.listeners.delete(listener);
+  }
+
+  onLimitExceeded(listener: () => void): void {
+    this.limitExceededListener = listener;
+  }
+
+  setEnabled(on: boolean): void {
+    if (this.enabled === on) return;
+    this.enabled = on;
+    if (!on) this.hideHover();
+    this.updateHoverVisibility();
+    this.broadcast();
+  }
+
+  attach(iframe: HTMLIFrameElement): void {
+    this.detach();
+    const doc = iframe.contentDocument;
+    if (!doc) return;
+    this.injectStyles(doc);
+    this.ensureHoverBox(doc);
+
+    const handlers = {
+      mousemove: (e: MouseEvent) => this.onMouseMove(e),
+      mouseleave: () => this.hideHover(),
+      click: (e: MouseEvent) => this.onClick(e),
+      keydown: (e: KeyboardEvent) => this.onKeydown(e),
+    };
+    doc.addEventListener("mousemove", handlers.mousemove);
+    doc.addEventListener("mouseleave", handlers.mouseleave);
+    doc.addEventListener("click", handlers.click, true);
+    doc.addEventListener("keydown", handlers.keydown, true);
+
+    this.attached = {
+      iframe,
+      doc,
+      hover: doc.getElementById(HOVER_ID) as HTMLElement,
+      handlers,
+    };
+  }
+
+  detach(): void {
+    if (!this.attached) return;
+    const { doc, handlers } = this.attached;
+    doc.removeEventListener("mousemove", handlers.mousemove);
+    doc.removeEventListener("mouseleave", handlers.mouseleave);
+    doc.removeEventListener("click", handlers.click, true);
+    doc.removeEventListener("keydown", handlers.keydown, true);
+    this.clearAll(true);
+    this.attached = null;
+  }
+
+  clearAll(silent = false): void {
+    for (const sel of this.selections) this.unmarkElement(sel.element);
+    this.selections = [];
+    this.nextId = 1;
+    if (!silent) this.broadcast();
+  }
+
+  private onMouseMove(e: MouseEvent): void {
+    if (!this.enabled || !this.attached) return;
+    const target = e.target as HTMLElement | null;
+    if (!target || target.id === HOVER_ID) return;
+    if (target.classList?.contains(SELECTED_BADGE_CLASS)) return;
+    const rect = target.getBoundingClientRect();
+    const hover = this.attached.hover;
+    if (!hover) return;
+    hover.style.display = "block";
+    hover.style.top = `${rect.top}px`;
+    hover.style.left = `${rect.left}px`;
+    hover.style.width = `${rect.width}px`;
+    hover.style.height = `${rect.height}px`;
+  }
+
+  private hideHover(): void {
+    if (!this.attached?.hover) return;
+    this.attached.hover.style.display = "none";
+  }
+
+  private updateHoverVisibility(): void {
+    if (!this.attached?.doc) return;
+    const body = this.attached.doc.body;
+    if (!body) return;
+    if (this.enabled) body.classList.add("od-picker-on");
+    else body.classList.remove("od-picker-on");
+  }
+
+  private onClick(e: MouseEvent): void {
+    if (!this.enabled || !this.attached) return;
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    if (target.id === HOVER_ID || target.classList?.contains(SELECTED_BADGE_CLASS)) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (e.shiftKey) {
+      this.clearAll(true);
+      this.addSelection(target);
+      this.broadcast();
+      return;
+    }
+
+    const existing = this.selections.findIndex((s) => s.element === target);
+    if (existing !== -1) {
+      this.removeAt(existing);
+      this.broadcast();
+      return;
+    }
+
+    if (this.selections.length >= MAX_SELECTIONS) {
+      this.limitExceededListener?.();
+      return;
+    }
+
+    this.addSelection(target);
+    this.broadcast();
+  }
+
+  private onKeydown(e: KeyboardEvent): void {
+    if (e.key === "Escape" && this.enabled) {
+      this.setEnabled(false);
+    }
+  }
+
+  private addSelection(el: HTMLElement): void {
+    if (!this.attached) return;
+    const doc = this.attached.doc;
+    const rect = el.getBoundingClientRect();
+    const snap: SelectionSnapshot = {
+      id: this.nextId++,
+      element: el,
+      selector: computeSelector(el),
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      outerHTML: el.outerHTML ?? "",
+      styles: collectStyles(el, doc),
+    };
+    this.selections.push(snap);
+    this.markElement(el, snap.id);
+  }
+
+  private removeAt(index: number): void {
+    const [removed] = this.selections.splice(index, 1);
+    this.unmarkElement(removed.element);
+    // Renumber subsequent selections so badges stay contiguous.
+    for (let i = index; i < this.selections.length; i++) {
+      const s = this.selections[i];
+      s.id = i + 1;
+      this.updateBadge(s.element, s.id);
+    }
+    this.nextId = this.selections.length + 1;
+  }
+
+  removeById(id: number): void {
+    const index = this.selections.findIndex((s) => s.id === id);
+    if (index === -1) return;
+    this.removeAt(index);
+    this.broadcast();
+  }
+
+  private markElement(el: HTMLElement, id: number): void {
+    el.setAttribute(SELECTED_ATTR, String(id));
+    const badge = (el.ownerDocument ?? document).createElement("span");
+    badge.className = SELECTED_BADGE_CLASS;
+    badge.textContent = String(id);
+    badge.setAttribute("data-od-badge-for", String(id));
+    el.appendChild(badge);
+  }
+
+  private updateBadge(el: HTMLElement, id: number): void {
+    el.setAttribute(SELECTED_ATTR, String(id));
+    const badge = el.querySelector(`.${SELECTED_BADGE_CLASS}`);
+    if (badge) {
+      badge.textContent = String(id);
+      badge.setAttribute("data-od-badge-for", String(id));
+    }
+  }
+
+  private unmarkElement(el: HTMLElement): void {
+    el.removeAttribute(SELECTED_ATTR);
+    const badge = el.querySelector(`.${SELECTED_BADGE_CLASS}`);
+    if (badge && badge.parentElement) badge.parentElement.removeChild(badge);
+  }
+
+  private broadcast(): void {
+    const snapshot = this.getSelections();
+    for (const fn of this.listeners) fn(snapshot);
+  }
+
+  private injectStyles(doc: Document): void {
+    if (doc.getElementById(STYLE_ID)) return;
+    const style = doc.createElement("style");
+    style.id = STYLE_ID;
+    style.textContent = `
+      #${HOVER_ID} {
+        position: fixed;
+        pointer-events: none;
+        border: 2px dashed #f59e0b;
+        background: rgba(245, 158, 11, 0.06);
+        z-index: 2147483646;
+        display: none;
+      }
+      [${SELECTED_ATTR}] {
+        outline: 2px solid #f59e0b !important;
+        outline-offset: 2px;
+        position: relative;
+      }
+      .${SELECTED_BADGE_CLASS} {
+        position: absolute;
+        top: -10px;
+        left: -10px;
+        width: 22px;
+        height: 22px;
+        border-radius: 11px;
+        background: #f59e0b;
+        color: #1f1300;
+        font: 600 12px/22px ui-sans-serif, system-ui, sans-serif;
+        text-align: center;
+        z-index: 2147483647;
+        pointer-events: none;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+      }
+      body:not(.od-picker-on) #${HOVER_ID} {
+        display: none !important;
+      }
+    `;
+    doc.head.appendChild(style);
+  }
+
+  private ensureHoverBox(doc: Document): void {
+    if (doc.getElementById(HOVER_ID)) return;
+    const box = doc.createElement("div");
+    box.id = HOVER_ID;
+    doc.body.appendChild(box);
   }
 }
 
 function computeSelector(el: HTMLElement): string {
-  // Priority: data-testid -> id -> CSS path with nth-child fallback.
   if (el.dataset.testid) return `[data-testid="${el.dataset.testid}"]`;
   if (el.id) return `#${cssEscape(el.id)}`;
 
@@ -273,116 +364,4 @@ function collectStyles(el: HTMLElement, doc: Document): Record<string, string> {
     }
   }
   return out;
-}
-
-function showPanel(sel: ActiveSelection): void {
-  removePanel();
-  const root = document.getElementById("picker-root")!;
-
-  panelEl = document.createElement("div");
-  panelEl.className = "od-panel";
-  panelEl.innerHTML = `
-    <div class="od-panel-header">
-      <span class="od-selector"></span>
-      <button class="od-close" type="button" aria-label="Close">×</button>
-    </div>
-    <div class="od-meta">
-      <span class="od-file"></span>
-      <span class="od-rect"></span>
-    </div>
-    <textarea placeholder="What should change about this element?"></textarea>
-    <div class="od-actions">
-      <button class="od-copy" type="button">Copy</button>
-    </div>
-  `;
-  (panelEl.querySelector(".od-selector") as HTMLElement).textContent = sel.selector;
-  (panelEl.querySelector(".od-file") as HTMLElement).textContent = `${sel.project}/${sel.file}`;
-  (panelEl.querySelector(".od-rect") as HTMLElement).textContent =
-    `${Math.round(sel.rect.width)}×${Math.round(sel.rect.height)}`;
-
-  positionPanel(panelEl, sel.iframe, sel.rect);
-  root.appendChild(panelEl);
-
-  const textarea = panelEl.querySelector("textarea") as HTMLTextAreaElement;
-  textarea.focus();
-
-  panelEl.querySelector(".od-close")?.addEventListener("click", closePanel);
-  panelEl.querySelector(".od-copy")?.addEventListener("click", () => onCopy(textarea.value));
-  textarea.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-      onCopy(textarea.value);
-    }
-  });
-}
-
-function positionPanel(panel: HTMLElement, iframe: HTMLIFrameElement, rect: DOMRect): void {
-  const iframeRect = iframe.getBoundingClientRect();
-  const panelWidth = 320;
-  const panelHeight = 240;
-  const margin = 8;
-
-  // Anchor: try right of selection, then below, then fall back to top-right of iframe.
-  let left = iframeRect.left + rect.right + margin;
-  let top = iframeRect.top + rect.top;
-
-  if (left + panelWidth > window.innerWidth - margin) {
-    left = iframeRect.left + rect.left - panelWidth - margin;
-  }
-  if (left < margin) {
-    left = Math.max(margin, iframeRect.right - panelWidth - margin);
-  }
-  if (top + panelHeight > window.innerHeight - margin) {
-    top = Math.max(margin, window.innerHeight - panelHeight - margin);
-  }
-  panel.style.left = `${left}px`;
-  panel.style.top = `${top}px`;
-}
-
-function onCopy(prompt: string): void {
-  if (!activeSelection) return;
-  const ctx: SelectionContext = {
-    project: activeSelection.project,
-    file: activeSelection.file,
-    selector: activeSelection.selector,
-    rect: {
-      x: activeSelection.rect.x,
-      y: activeSelection.rect.y,
-      width: activeSelection.rect.width,
-      height: activeSelection.rect.height,
-    },
-    outerHTML: activeSelection.outerHTML,
-    styles: activeSelection.styles,
-    prompt,
-  };
-  const payload = buildPayload(ctx);
-  navigator.clipboard
-    .writeText(payload)
-    .then(() => showToast("Copied – paste into Claude Code."))
-    .catch(() => showToast("Clipboard blocked – use ⌘/Ctrl+C from the textarea."));
-}
-
-function closePanel(): void {
-  removePanel();
-  clearFrozenBox();
-  activeSelection = null;
-}
-
-function removePanel(): void {
-  if (panelEl && panelEl.parentNode) {
-    panelEl.parentNode.removeChild(panelEl);
-  }
-  panelEl = null;
-}
-
-function showToast(message: string): void {
-  let toast = document.querySelector(".od-toast") as HTMLElement | null;
-  if (!toast) {
-    toast = document.createElement("div");
-    toast.className = "od-toast";
-    document.body.appendChild(toast);
-  }
-  toast.textContent = message;
-  toast.classList.add("visible");
-  if (toastTimer) window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => toast?.classList.remove("visible"), 1800);
 }

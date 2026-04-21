@@ -1,15 +1,29 @@
 :root {
-  --bg: #0f172a;
-  --panel: #1e293b;
-  --border: #334155;
-  --text: #e2e8f0;
-  --muted: #94a3b8;
+  /* Neutral dark grey palette – no blue cast, not pure black.
+     --panel is the shared surface for the header, tweaks panel, and composer. */
+  --bg: #121214;
+  --panel: #1c1c1f;
+  --panel-2: #2a2a2e;
+  --border: #3a3a3e;
+  --text: #e4e4e7;
+  --muted: #a1a1a8;
   --accent: #f59e0b;
-  --accent-soft: rgba(245, 158, 11, 0.18);
+  --accent-ink: #1f1300;
+  --danger: #ef4444;
+  --header-h: 52px;
+  --tweaks-w: 340px;
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* Kill any display rule that would otherwise beat the browser's default
+   [hidden] { display: none }. Prevents entire overlays (empty-state,
+   tweaks-panel, composer) from leaking through because a more specific
+   rule declared display: flex. */
+[hidden] {
+  display: none !important;
 }
 
 html,
@@ -19,18 +33,22 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  overflow: hidden;
 }
 
+/* Header ------------------------------------------------------------------ */
+
 #app-header {
-  position: sticky;
-  top: 0;
-  z-index: 10;
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: var(--header-h);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 20px;
+  padding: 0 16px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
+  z-index: 20;
 }
 
 .brand {
@@ -40,10 +58,16 @@ body {
 
 .meta {
   display: flex;
-  gap: 16px;
   align-items: center;
+  gap: 10px;
   color: var(--muted);
   font-size: 13px;
+}
+
+#project-label {
+  margin-right: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
 }
 
 button {
@@ -51,9 +75,13 @@ button {
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 6px 12px;
+  padding: 5px 12px;
   font-size: 13px;
+  font-family: inherit;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 button:hover {
@@ -61,55 +89,165 @@ button:hover {
   color: var(--accent);
 }
 
-#grid {
-  display: grid;
-  gap: 16px;
-  padding: 16px;
-  grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr));
+button.primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+  font-weight: 600;
 }
 
-.draft-card {
-  display: flex;
-  flex-direction: column;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  overflow: hidden;
-  min-height: 480px;
+button.primary:hover {
+  filter: brightness(1.05);
+  color: var(--accent-ink);
 }
 
-.draft-card header {
-  display: flex;
+/* Switch toggles ---------------------------------------------------------- */
+
+button[role="switch"] {
+  background: transparent;
+  border: none;
+  padding: 4px 2px;
+  margin: 0;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
+  gap: 8px;
   font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  line-height: 1;
 }
 
-.draft-card header .label {
-  font-weight: 500;
+button[role="switch"]:hover {
+  color: var(--text);
+  border: none;
 }
 
-.draft-card header .id {
-  color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
+button[role="switch"]:hover .switch-track {
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.15);
 }
 
-.draft-card iframe {
-  flex: 1;
+.switch-label {
+  user-select: none;
+}
+
+.switch-track {
+  position: relative;
+  display: inline-block;
+  width: 32px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--border);
+  transition: background 160ms ease-out;
+  flex: 0 0 auto;
+}
+
+.switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #e2e8f0;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 160ms ease-out, background 160ms ease-out;
+}
+
+button[role="switch"][aria-checked="true"] .switch-track {
+  background: var(--accent);
+}
+
+button[role="switch"][aria-checked="true"] .switch-thumb {
+  transform: translateX(14px);
+  background: var(--accent-ink);
+}
+
+button[role="switch"]:focus-visible {
+  outline: none;
+}
+
+button[role="switch"]:focus-visible .switch-track {
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+}
+
+/* Stage ------------------------------------------------------------------- */
+
+#stage {
+  position: fixed;
+  inset: var(--header-h) 0 0 0;
+  overflow: hidden;
+}
+
+#draft-frame {
   width: 100%;
+  height: 100%;
   border: none;
   background: white;
 }
 
+#stage.has-composer #draft-frame {
+  height: calc(100% - var(--composer-h, 0px));
+}
+
 .empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 48px;
+  background: var(--bg);
+  overflow-y: auto;
+}
+
+.empty-card {
+  max-width: 560px;
+  color: var(--text);
+  text-align: left;
+}
+
+.empty-card h1 {
+  margin: 0 0 12px 0;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.empty-card p {
   color: var(--muted);
-  text-align: center;
-  font-size: 14px;
   line-height: 1.6;
+  margin: 0 0 20px 0;
+  font-size: 14px;
+}
+
+.empty-card ol {
+  margin: 0 0 24px 0;
+  padding-left: 22px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.empty-card ol li {
+  margin-bottom: 6px;
+}
+
+.empty-card ol li::marker {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.empty-card strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.empty-foot {
+  font-size: 13px;
+  color: var(--muted);
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+  margin-bottom: 0 !important;
 }
 
 .empty code {
@@ -117,99 +255,275 @@ button:hover {
   padding: 2px 6px;
   border-radius: 4px;
   color: var(--accent);
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-/* Picker overlay – injected into iframes via picker.ts. The .od-* classes
-   live inside the iframe document, so they are scoped there. The panel
-   below lives in the parent document. */
-.od-panel {
+/* When there are no drafts, the picker + tweaks controls are meaningless.
+   Hide them so the empty-state onboarding has the stage to itself. */
+body.no-drafts #tweaks-panel,
+body.no-drafts #picker-toggle,
+body.no-drafts #tweaks-toggle {
+  display: none !important;
+}
+
+/* Floating panels (tweaks + composer) -------------------------------------- */
+
+#tweaks-panel {
   position: fixed;
-  z-index: 9999;
-  width: 320px;
+  right: 16px;
+  bottom: 16px;
+  width: var(--tweaks-w);
+  max-height: calc(100vh - var(--header-h) - 32px);
   background: var(--panel);
-  color: var(--text);
-  border: 1px solid var(--accent);
-  border-radius: 10px;
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
-  font-family: ui-sans-serif, system-ui, sans-serif;
-  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
   display: flex;
   flex-direction: column;
+  z-index: 15;
   overflow: hidden;
 }
 
-.od-panel .od-panel-header {
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
+#tweaks-panel header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
 }
 
-.od-panel .od-panel-header .od-selector {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px;
-  color: var(--accent);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-}
-
-.od-panel .od-panel-header .od-close {
+#tweaks-close {
   background: transparent;
   border: none;
   color: var(--muted);
-  font-size: 16px;
-  cursor: pointer;
-  padding: 0 4px;
+  font-size: 20px;
   line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
 }
 
-.od-panel .od-meta {
-  padding: 8px 12px;
-  font-size: 11px;
-  color: var(--muted);
-  border-bottom: 1px solid var(--border);
+#tweaks-close:hover {
+  color: var(--accent);
+}
+
+#tweaks-body {
+  padding: 12px 14px;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 14px;
 }
 
-.od-panel textarea {
-  background: var(--bg);
-  color: var(--text);
-  border: none;
-  padding: 12px;
-  resize: vertical;
-  min-height: 90px;
-  font-family: inherit;
-  font-size: 13px;
-  outline: none;
-}
-
-.od-panel .od-actions {
+.tweak {
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 8px 12px;
-  border-top: 1px solid var(--border);
+  flex-direction: column;
+  gap: 6px;
 }
 
-.od-panel .od-copy {
-  background: var(--accent);
-  color: #1f1300;
-  border: none;
+.tweak label {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tweak select,
+.tweak input[type="text"] {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 6px 14px;
-  font-weight: 600;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.tweak.variant {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.slider-row,
+.color-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.slider-row input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.slider-readout,
+.color-hex {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--accent);
+  min-width: 60px;
+  text-align: right;
+}
+
+.color-row input[type="color"] {
+  width: 40px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  padding: 0;
   cursor: pointer;
 }
 
-.od-panel .od-copy:hover {
-  filter: brightness(1.05);
+.tweak-toggle {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
 }
+
+.tweak-toggle input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 18px;
+  height: 18px;
+}
+
+.tweak-empty {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+}
+
+/* Composer ---------------------------------------------------------------- */
+
+#composer {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  width: var(--tweaks-w);
+  max-height: calc(100vh - var(--header-h) - 32px);
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+  z-index: 18;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#composer > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+#composer-count {
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+#composer-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  overflow-y: auto;
+  max-height: 180px;
+}
+
+#composer-chips:empty {
+  display: none;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 4px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  max-width: 100%;
+}
+
+.chip-num {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+  font-size: 11px;
+  text-align: center;
+  line-height: 18px;
+  flex: 0 0 auto;
+}
+
+.chip-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-close {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.chip-close:hover {
+  color: var(--danger);
+}
+
+#composer-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px;
+}
+
+#composer-input {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 13px;
+  min-height: 70px;
+}
+
+#composer-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.composer-buttons {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+/* Toast ------------------------------------------------------------------- */
 
 .od-toast {
   position: fixed;
@@ -219,13 +533,14 @@ button:hover {
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--accent);
-  border-radius: 6px;
-  padding: 8px 16px;
+  border-radius: 8px;
+  padding: 10px 18px;
   font-size: 13px;
   z-index: 10000;
   opacity: 0;
   transition: opacity 200ms ease-out;
   pointer-events: none;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
 }
 
 .od-toast.visible {
