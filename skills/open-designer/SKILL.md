@@ -114,7 +114,23 @@ If the request needs a new variant rather than an in-place edit, write a new `NN
 
 When the user picks a variant, switch out of design mode and treat the chosen HTML as a spec. Port the markup and styles into the real components. Do not leave the chosen draft as the implementation – it is a design artifact, not production code.
 
+## Reference shelf
+
+`REFERENCES.md` lists vetted MIT/Apache-2.0 component libraries you may
+consult when:
+
+- The user explicitly asks for a particular aesthetic ("make it feel
+  like shadcn", "use a Magic UI animation").
+- You are working greenfield with no existing design system.
+
+The shelf is opt-in. For existing-UI work, fidelity to
+`.open-designer/design-system.md` always wins over any reference.
+Re-read the shelf's preamble before pulling from it – it documents
+which sources have failed audit (Aceternity, animate-ui, prebuiltui,
+21st.dev community defaults) so you do not vendor them by mistake.
+
 ## Companion files
 
 - `INIT.md` – step-by-step repo scan procedure.
 - `WORKFLOW.md` – greenfield path, multi-page projects, common pitfalls.
+- `REFERENCES.md` – vetted look-and-feel sources with licenses.
