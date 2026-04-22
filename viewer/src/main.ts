@@ -145,6 +145,13 @@ function handleHotkey(e: KeyboardEvent): void {
     togglePicker();
     return;
   }
+  // Shift+Comma produces "<" on US layouts, so match e.code.
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.code === "Comma") {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleTweaksPanel();
+    return;
+  }
   if (e.key === "Escape" && document.body.classList.contains("fullscreen-mode")) {
     e.preventDefault();
     e.stopPropagation();
