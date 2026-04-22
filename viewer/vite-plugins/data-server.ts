@@ -2,9 +2,12 @@
 // Matches the production launcher's routing so the viewer behaves identically
 // under `vite dev` and `node launcher/serve.mjs`.
 
-import { createReadStream, existsSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import type { Plugin } from "vite";
+// Shared with serve.mjs via a .mjs module + .d.ts sidecar (zero-dep launcher
+// can't consume TS). Single source of truth for the finalize merge logic.
+import { applyFinalizeBody, isValidDesignName } from "../../launcher/finalize.mjs";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -22,53 +25,54 @@ export const DATA_CHANGED_EVENT = "open-designer:data-changed";
 
 // Merge a `chosen` payload into the design's index.json. Writes through a
 // temp file + rename so a concurrent reader never sees a half-written JSON.
-// `chosen: null` in the body clears the field.
+// Body shapes and merge logic live in launcher/finalize.mjs (shared with the
+// production launcher).
 function handleFinalize(
   req: import("node:http").IncomingMessage,
   res: import("node:http").ServerResponse,
   root: string,
   design: string,
 ): void {
+  if (!isValidDesignName(design)) {
+    res.statusCode = 400;
+    res.end("invalid design name");
+    return;
+  }
+  const indexPath = join(root, "drafts", design, "index.json");
+  if (!indexPath.startsWith(join(root, "drafts") + sep)) {
+    res.statusCode = 403;
+    res.end("forbidden");
+    return;
+  }
+  if (!existsSync(indexPath)) {
+    res.statusCode = 404;
+    res.end("index.json not found");
+    return;
+  }
   const chunks: Buffer[] = [];
   req.on("data", (c: Buffer) => chunks.push(c));
   req.on("end", () => {
+    const tmp = indexPath + ".tmp";
     try {
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
-      const indexPath = join(root, "drafts", design, "index.json");
-      if (!indexPath.startsWith(root + sep)) {
-        res.statusCode = 403;
-        res.end("forbidden");
-        return;
-      }
-      if (!existsSync(indexPath)) {
-        res.statusCode = 404;
-        res.end("index.json not found");
-        return;
-      }
       const current = JSON.parse(readFileSync(indexPath, "utf8"));
-      if (body.chosen === null) {
-        delete current.chosen;
-      } else if (body.chosen && typeof body.chosen === "object") {
-        current.chosen = {
-          variantId: String(body.chosen.variantId ?? ""),
-          tweaks:
-            body.chosen.tweaks && typeof body.chosen.tweaks === "object"
-              ? body.chosen.tweaks
-              : {},
-          finalizedAt: String(body.chosen.finalizedAt ?? new Date().toISOString()),
-          ...(body.chosen.shippedAt ? { shippedAt: String(body.chosen.shippedAt) } : {}),
-        };
-      } else {
+      const merged = applyFinalizeBody(current.chosen, body);
+      if (merged.error) {
         res.statusCode = 400;
-        res.end("missing chosen");
+        res.end(merged.error);
         return;
       }
-      const tmp = indexPath + ".tmp";
+      if (merged.chosen === null) {
+        delete current.chosen;
+      } else {
+        current.chosen = merged.chosen;
+      }
       writeFileSync(tmp, JSON.stringify(current, null, 2));
       renameSync(tmp, indexPath);
       res.setHeader("content-type", "application/json; charset=utf-8");
       res.end(JSON.stringify({ ok: true, chosen: current.chosen ?? null }));
     } catch (err) {
+      try { unlinkSync(tmp); } catch { /* no partial temp to clean */ }
       res.statusCode = 500;
       res.end(`finalize failed: ${(err as Error).message}`);
     }

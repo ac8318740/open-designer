@@ -8,10 +8,20 @@
   </head>
   <body>
     <header id="app-header">
-      <div class="brand">open-designer</div>
+      <div class="brand-group">
+        <div class="brand">open-designer</div>
+        <span id="project-label" class="with-left-divider"></span>
+        <div class="select-with-caption with-left-divider" id="design-select-group">
+          <span class="select-caption" aria-hidden="true">Design</span>
+          <select id="design-select" title="Switch design" aria-label="Design"></select>
+        </div>
+      </div>
       <div class="meta">
-        <select id="design-select" title="Switch design" aria-label="Design"></select>
-        <span id="project-label"></span>
+        <button id="back-btn" type="button" title="Back to previous page" hidden>← Back</button>
+        <div class="select-with-caption" id="page-select-group">
+          <span class="select-caption" aria-hidden="true">Page</span>
+          <select id="page-select" title="Switch page" aria-label="Page"></select>
+        </div>
         <button id="picker-toggle" type="button" role="switch" aria-checked="false" title="Toggle element selection (Ctrl+Shift+K)">
           <span class="switch-label">Select Elements</span>
           <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
@@ -19,6 +29,11 @@
         <button id="tweaks-toggle" type="button" role="switch" aria-checked="false" title="Toggle tweaks panel">
           <span class="switch-label">Tweaks</span>
           <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+        </button>
+        <button id="fullscreen-btn" type="button" title="Fullscreen (Esc to exit)" aria-label="Fullscreen (press Escape to exit)">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4"/>
+          </svg>
         </button>
         <button id="refresh-btn" type="button" title="Reload drafts">Refresh</button>
       </div>

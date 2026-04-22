@@ -24,11 +24,26 @@ The user has no existing UI yet. There is no current state to anchor against.
 
 ## Multi-page projects
 
-If the request covers multiple pages (e.g. "design the auth flow"):
+If the request covers multiple screens (e.g. "design the auth flow"), model each screen as a **page** in the index, with its own variants folder:
 
-- One project folder, multiple drafts. `drafts/auth-flow/01-sign-in.html`, `02-sign-up.html`, `03-reset.html`.
-- Use the `label` field in `index.json` to name them clearly so the viewer grid is readable.
-- If the user wants variants of each page, prefix: `01a-sign-in-minimal.html`, `01b-sign-in-illustrated.html`.
+```
+drafts/
+  auth-flow/
+    index.json
+    sign-in/
+      01-default.html
+      02-illustrated.html
+    sign-up/
+      01-default.html
+    reset/
+      01-default.html
+```
+
+- One page entry per screen in `index.json`'s `pages: []` array.
+- Each page can have one or multiple variants. Variants inside a page share the page's content structure and differ in styling.
+- Wire the flow with `data-od-link`: "Create account" on sign-in → `sign-up`, "Forgot password?" → `reset`, and so on.
+
+See `PAGES.md` for the page-vs-variant decision tree.
 
 ## Pitfalls to avoid
 

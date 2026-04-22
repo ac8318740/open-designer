@@ -3,11 +3,12 @@
 // Serves the built viewer at / and .open-designer/ at /data/.
 
 import { createServer } from "node:http";
-import { readFile, stat, readdir, writeFile, rename } from "node:fs/promises";
+import { readFile, stat, readdir, writeFile, rename, unlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { applyFinalizeBody, isValidDesignName } from "./finalize.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const PLUGIN_ROOT = resolve(__dirname, "..");
@@ -80,41 +81,43 @@ async function readBody(req) {
 }
 
 // Merge a `chosen` payload into a design's index.json atomically.
+// Body shapes and merge logic live in finalize.mjs (shared with
+// data-server.ts).
 async function handleFinalize(req, res, design) {
+  if (!isValidDesignName(design)) {
+    res.writeHead(400);
+    return res.end("invalid design name");
+  }
+  const indexPath = safeJoin(DATA_ROOT, `drafts/${design}/index.json`);
+  if (!indexPath) {
+    res.writeHead(403);
+    return res.end("Forbidden");
+  }
+  if (!existsSync(indexPath)) {
+    res.writeHead(404);
+    return res.end("index.json not found");
+  }
+  const tmp = indexPath + ".tmp";
   try {
-    const indexPath = safeJoin(DATA_ROOT, `drafts/${design}/index.json`);
-    if (!indexPath) {
-      res.writeHead(403);
-      return res.end("Forbidden");
-    }
-    if (!existsSync(indexPath)) {
-      res.writeHead(404);
-      return res.end("index.json not found");
-    }
     const body = JSON.parse((await readBody(req)) || "{}");
     const current = JSON.parse(await readFile(indexPath, "utf8"));
-    if (body.chosen === null) {
-      delete current.chosen;
-    } else if (body.chosen && typeof body.chosen === "object") {
-      current.chosen = {
-        variantId: String(body.chosen.variantId ?? ""),
-        tweaks:
-          body.chosen.tweaks && typeof body.chosen.tweaks === "object"
-            ? body.chosen.tweaks
-            : {},
-        finalizedAt: String(body.chosen.finalizedAt ?? new Date().toISOString()),
-        ...(body.chosen.shippedAt ? { shippedAt: String(body.chosen.shippedAt) } : {}),
-      };
-    } else {
+    const merged = applyFinalizeBody(current.chosen, body);
+    if (merged.error) {
       res.writeHead(400);
-      return res.end("missing chosen");
+      return res.end(merged.error);
     }
-    const tmp = indexPath + ".tmp";
+    if (merged.chosen === null) {
+      delete current.chosen;
+    } else {
+      current.chosen = merged.chosen;
+    }
     await writeFile(tmp, JSON.stringify(current, null, 2));
     await rename(tmp, indexPath);
     res.writeHead(200, { "Content-Type": MIME[".json"] });
     res.end(JSON.stringify({ ok: true, chosen: current.chosen ?? null }));
   } catch (err) {
+    // Clean up the temp file if the rename never happened.
+    try { await unlink(tmp); } catch { /* ignore */ }
     res.writeHead(500);
     res.end(`finalize failed: ${err.message}`);
   }

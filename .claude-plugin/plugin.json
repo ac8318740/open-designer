@@ -1,7 +1,7 @@
 {
   "name": "open-designer",
   "description": "Local design loop – Claude writes HTML drafts, you click elements in a viewer to iterate.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "ac8318740"
   },

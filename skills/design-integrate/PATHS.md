@@ -2,6 +2,8 @@
 
 Two paths. The goal is to match discipline to actual risk, not to run every design through the full pipeline.
 
+**Triage is per page.** A multi-page design can take different paths for different pages – e.g. the list takes the quick path (pure UI reshuffle over existing data) while the detail takes the full pipeline (introduces a new table). Mix freely; don't average.
+
 ## Scoring axes
 
 From the three exploration agents, score each axis **low / medium / high**:
@@ -100,7 +102,26 @@ Design: "library modal redesign".
 
 Recommendation: quick path. Flag the medium novelty so the user can upgrade to full pipeline if they want tests first.
 
+### Example D – heterogeneous multi-page design
+
+Design: "meeting-notes" with pages `log` and `detail`.
+
+- **log** page:
+  - Backend gap: **low** – `meetings` table + `listMeetings` query exist.
+  - Component novelty: **low** – `ListRow` and `DayHeading` are reusable.
+  - Cross-cutting: **low** – sits in the existing dashboard shell.
+  - Path: **quick**.
+
+- **detail** page:
+  - Backend gap: **high** – no `meeting_notes` table, no `saveMeetingNote` action.
+  - Component novelty: **medium** – new editor surface.
+  - Cross-cutting: **low** – self-contained route.
+  - Path: **full pipeline**.
+
+Recommendation: ship `log` with `/spechub:implement-quick` first, then run `/spechub:propose` → `/spechub:design` → `/spechub:implement` for `detail`. The log's Link-to-detail will initially 404 in dev until the detail route lands, which is fine.
+
 ## What NOT to do
 
 - Don't default to full pipeline "to be safe". The user will stop using this skill if every visual tweak turns into a proposal.
 - Don't default to quick path when a backend gap is hiding. Cite the missing table or endpoint explicitly in the recommendation so the user sees it.
+- Don't force one path on all pages of a design. Score each page independently.

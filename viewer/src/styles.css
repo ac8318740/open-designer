@@ -12,6 +12,9 @@
   --danger: #ef4444;
   --header-h: 52px;
   --tweaks-w: 340px;
+  /* Vertical rule between header clusters. Set here so it tracks one place
+     rather than being hardcoded at the pseudo-element. */
+  --divider-h: 18px;
 }
 
 * {
@@ -51,9 +54,20 @@ body {
   z-index: 20;
 }
 
+.brand-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .brand {
   font-weight: 600;
   letter-spacing: 0.02em;
+  line-height: 1;
+  /* Optical nudge: the wordmark has descenders (g, p) but no uppercase
+     ascenders, so the glyph's visual center sits below the line-box
+     center. 1px up brings it to optical center against the dropdowns. */
+  transform: translateY(-1px);
 }
 
 .meta {
@@ -65,12 +79,53 @@ body {
 }
 
 #project-label {
-  margin-right: 6px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
+  color: var(--muted);
 }
 
-#design-select {
+#fullscreen-btn {
+  padding: 5px 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#fullscreen-btn svg {
+  display: block;
+}
+
+/* Fullscreen mode: hide all app chrome so the draft iframe fills the
+   viewport. Exits on Escape (handled in main.ts). */
+body.fullscreen-mode #app-header,
+body.fullscreen-mode #tweaks-panel,
+body.fullscreen-mode #composer {
+  display: none !important;
+}
+
+body.fullscreen-mode #stage {
+  inset: 0;
+}
+
+.with-left-divider {
+  position: relative;
+  padding-left: 20px;
+  margin-left: 4px;
+}
+
+.with-left-divider::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: var(--divider-h);
+  background: var(--border);
+}
+
+#design-select,
+#page-select {
   background: var(--panel-2);
   color: var(--text);
   border: 1px solid var(--border);
@@ -81,12 +136,39 @@ body {
   cursor: pointer;
 }
 
-#design-select:hover {
+#design-select:hover,
+#page-select:hover {
   border-color: var(--accent);
 }
 
-body.no-multi-design #design-select {
+.select-with-caption {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.select-caption {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  user-select: none;
+  line-height: 1;
+}
+
+body.no-multi-design #design-select-group {
   display: none;
+}
+
+body.no-multi-page #page-select-group {
+  display: none;
+}
+
+#back-btn {
+  padding: 5px 10px;
+  font-size: 12px;
+  line-height: 1;
 }
 
 button {
@@ -201,7 +283,16 @@ button[role="switch"]:focus-visible .switch-track {
   width: 100%;
   height: 100%;
   border: none;
-  background: white;
+  /* Neutral dark fallback matching the viewer shell. syncIframeBackground
+     (main.ts) overrides this to the draft's own html/body bg on load so
+     the scrollbar gutter blends in. Keeping the fallback dark means a
+     load error or 404 blends with the chrome rather than flashing white. */
+  background: var(--bg);
+  transition: opacity 150ms ease-out;
+}
+
+#draft-frame.fading {
+  opacity: 0;
 }
 
 #stage.has-composer #draft-frame {
@@ -283,7 +374,9 @@ button[role="switch"]:focus-visible .switch-track {
 body.no-drafts #tweaks-panel,
 body.no-drafts #picker-toggle,
 body.no-drafts #tweaks-toggle,
-body.no-drafts #design-select {
+body.no-drafts #design-select-group,
+body.no-drafts #page-select-group,
+body.no-drafts #back-btn {
   display: none !important;
 }
 
@@ -291,8 +384,6 @@ body.no-drafts #design-select {
 
 #tweaks-panel {
   position: fixed;
-  right: 16px;
-  bottom: 16px;
   width: var(--tweaks-w);
   max-height: calc(100vh - var(--header-h) - 32px);
   background: var(--panel);
@@ -303,6 +394,38 @@ body.no-drafts #design-select {
   flex-direction: column;
   z-index: 15;
   overflow: hidden;
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Each corner locks the outer edge so the panel grows inward. */
+#tweaks-panel.corner-br {
+  right: 16px;
+  bottom: 16px;
+  top: auto;
+  left: auto;
+}
+#tweaks-panel.corner-bl {
+  left: 16px;
+  bottom: 16px;
+  top: auto;
+  right: auto;
+}
+#tweaks-panel.corner-tr {
+  right: 16px;
+  top: calc(var(--header-h) + 16px);
+  bottom: auto;
+  left: auto;
+}
+#tweaks-panel.corner-tl {
+  left: 16px;
+  top: calc(var(--header-h) + 16px);
+  bottom: auto;
+  right: auto;
+}
+
+#tweaks-panel.dragging {
+  transition: none;
+  user-select: none;
 }
 
 #tweaks-panel header {
@@ -313,6 +436,12 @@ body.no-drafts #design-select {
   border-bottom: 1px solid var(--border);
   font-size: 13px;
   font-weight: 600;
+  cursor: grab;
+  touch-action: none;
+}
+
+#tweaks-panel.dragging header {
+  cursor: grabbing;
 }
 
 #tweaks-close {
@@ -432,6 +561,10 @@ body.no-drafts #design-select {
 .tweak-clear-chosen {
   font-size: 12px;
   color: var(--muted);
+}
+
+.tweak-finalize-all {
+  font-size: 12px;
 }
 
 #chosen-pill {

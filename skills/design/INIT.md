@@ -69,6 +69,6 @@ Re-run init when:
 
 - A new route or major component lands.
 - The theme changes (new tokens, renamed tokens, removed tokens).
-- The user asks ("re-init open-designer").
+- The user asks ("re-init the design skill", "re-init open-designer").
 
 Refresh in place. Do not append history files – the init folder is always the current snapshot.

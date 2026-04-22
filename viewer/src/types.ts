@@ -30,19 +30,48 @@ export interface DraftEntry {
   tweaks?: Tweak[];
 }
 
-export interface Chosen {
+export interface Page {
+  id: string;
+  label?: string;
+  tweaks?: Tweak[];
+  variants: DraftEntry[];
+}
+
+export interface ChosenPage {
   variantId: string;
   tweaks: Record<string, string>;
+}
+
+export interface Chosen {
   finalizedAt: string;
   shippedAt?: string;
+  pages: Record<string, ChosenPage>;
 }
 
 export interface DraftIndex {
   project: string;
   updated?: string;
   tweaks?: Tweak[]; // project-level tweaks, apply to every variant
-  drafts: DraftEntry[];
+  pages?: Page[];        // new shape
+  drafts?: DraftEntry[]; // legacy shape, read-only
+  chosen?: Chosen | LegacyChosen;
+}
+
+// Post-normalize shape. `chosen` is narrowed to the new `Chosen` form, and
+// `drafts` is dropped because `pages` is the only source of truth after
+// normalize. Only the raw fetch boundary should handle `DraftIndex`.
+export interface NormalizedIndex extends Omit<DraftIndex, "chosen" | "drafts"> {
+  pages: Page[];
   chosen?: Chosen;
+}
+
+// Legacy pre-pages chosen block. Read-only – the viewer normalizes it
+// to the new Chosen shape on load. Never write this shape.
+export interface LegacyChosen {
+  variantId: string;
+  tweaks: Record<string, string>;
+  finalizedAt: string;
+  shippedAt?: string;
 }
 
 export interface SelectionSnapshot {

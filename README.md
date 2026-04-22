@@ -6,7 +6,7 @@ No hosted backend. No API key billed by a third party. No cloud canvas. Just fil
 
 ## What you get
 
-- A skill (`open-designer`) that teaches Claude how to gather UI context, write pixel-perfect HTML drafts, and iterate based on pasted feedback.
+- A skill (`design`) that teaches Claude how to gather UI context, write pixel-perfect HTML drafts, and iterate based on pasted feedback. A companion skill (`design-integrate`) ports a finalized variant into the real codebase.
 - A static viewer that renders the drafts in an iframe grid.
 - An element picker overlay that captures a stable selector, the outer HTML, and key computed styles, then puts a Markdown payload on your clipboard.
 - A zero-dependency Node launcher that serves the viewer and the drafts folder from the same origin.
@@ -32,7 +32,8 @@ This plugin ships through the `ac8318740-plugins` marketplace. After adding the 
 
 ```
 .claude-plugin/plugin.json   – manifest
-skills/open-designer/        – the workflow Claude follows
+skills/design/               – the design-loop workflow Claude follows
+skills/design-integrate/     – port a finalized variant into the codebase
 viewer/                      – static viewer (Vite build)
 launcher/serve.mjs           – zero-dep static server
 LICENSE                      – MIT

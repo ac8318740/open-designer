@@ -9,13 +9,21 @@ export interface TweakBinding {
   onChange: (id: string, value: string) => void;
 }
 
-function storageKey(project: string, variant: string): string {
-  return `${STORAGE_PREFIX}${project}:${variant}`;
+// URL-encode each segment so IDs containing `:` can't alias across keys
+// (e.g. project "a:b" + page "c" must not collide with project "a" + page
+// "b:c"). Encoding is identity for ASCII-safe IDs, so existing values stay
+// readable on disk.
+function storageKey(project: string, page: string, variant: string): string {
+  return `${STORAGE_PREFIX}${encodeURIComponent(project)}:${encodeURIComponent(page)}:${encodeURIComponent(variant)}`;
 }
 
-export function loadStoredValues(project: string, variant: string): Record<string, string> {
+export function loadStoredValues(
+  project: string,
+  page: string,
+  variant: string,
+): Record<string, string> {
   try {
-    const raw = localStorage.getItem(storageKey(project, variant));
+    const raw = localStorage.getItem(storageKey(project, page, variant));
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     return typeof parsed === "object" && parsed ? parsed : {};
@@ -26,11 +34,12 @@ export function loadStoredValues(project: string, variant: string): Record<strin
 
 export function saveStoredValues(
   project: string,
+  page: string,
   variant: string,
   values: Record<string, string>,
 ): void {
   try {
-    localStorage.setItem(storageKey(project, variant), JSON.stringify(values));
+    localStorage.setItem(storageKey(project, page, variant), JSON.stringify(values));
   } catch {
     /* ignore quota or serialization errors */
   }
@@ -137,7 +146,10 @@ export function renderTweaksPanel(args: {
   values: Record<string, string>;
   onChange: (id: string, value: string) => void;
   chosenVariantId?: string;
+  pageLabel?: string;
+  showFinalizeAll?: boolean;
   onFinalize?: () => void;
+  onFinalizeAll?: () => void;
   onClearChosen?: () => void;
 }): void {
   const {
@@ -149,7 +161,10 @@ export function renderTweaksPanel(args: {
     values,
     onChange,
     chosenVariantId,
+    pageLabel,
+    showFinalizeAll,
     onFinalize,
+    onFinalizeAll,
     onClearChosen,
   } = args;
   root.innerHTML = "";
@@ -191,9 +206,21 @@ export function renderTweaksPanel(args: {
     const finalizeBtn = document.createElement("button");
     finalizeBtn.type = "button";
     finalizeBtn.className = "primary";
-    finalizeBtn.textContent = isChosen ? "Re-finalize with current tweaks" : "Finalize this";
+    const pageSuffix = pageLabel ? ` (${pageLabel})` : "";
+    finalizeBtn.textContent = isChosen
+      ? `Re-finalize this page${pageSuffix}`
+      : `Finalize this page${pageSuffix}`;
     finalizeBtn.addEventListener("click", () => onFinalize());
     actions.appendChild(finalizeBtn);
+
+    if (showFinalizeAll && onFinalizeAll) {
+      const allBtn = document.createElement("button");
+      allBtn.type = "button";
+      allBtn.className = "tweak-finalize-all";
+      allBtn.textContent = "Finalize all pages";
+      allBtn.addEventListener("click", () => onFinalizeAll());
+      actions.appendChild(allBtn);
+    }
 
     if (chosenVariantId && onClearChosen) {
       const clearBtn = document.createElement("button");
@@ -248,7 +275,16 @@ function renderTweak(
       const input = document.createElement("input");
       input.type = "color";
       input.id = `tweak-${tweak.id}`;
-      input.value = /^#[0-9a-fA-F]{6}$/.test(value) ? value : "#000000";
+      // Walk the fallback chain: current value -> declared default -> #000000.
+      // Keeps the declared default respected even when a stale non-hex value
+      // slipped through (e.g. a `currentColor` leftover from an earlier edit).
+      const hexRe = /^#[0-9a-fA-F]{6}$/;
+      const declaredDefault = String(tweak.default ?? "");
+      input.value = hexRe.test(value)
+        ? value
+        : hexRe.test(declaredDefault)
+          ? declaredDefault
+          : "#000000";
       const hex = document.createElement("span");
       hex.className = "color-hex";
       hex.textContent = input.value;
