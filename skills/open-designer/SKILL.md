@@ -180,9 +180,45 @@ To apply either shape:
 
 If the request needs a new variant rather than an in-place edit, write a new `NN-*.html`, add its `drafts` entry to `index.json`, and copy over relevant tweaks.
 
+## Finalizing a variant
+
+The viewer has a **Finalize this** button at the bottom of the Tweaks panel. Clicking it writes a `chosen` block into the design's `index.json`:
+
+```json
+{
+  "project": "reading-streaks",
+  "drafts": [...],
+  "chosen": {
+    "variantId": "02-cozy",
+    "tweaks": { "cta-bg": "#7c2d12", "section-pad": "96" },
+    "finalizedAt": "2026-04-22T10:00:00Z"
+  }
+}
+```
+
+`chosen.tweaks` snapshots the user's tweak values at the moment of finalize and overrides the variant's declared defaults at integration time. The button re-reads as "Re-finalize with current tweaks" once a chosen exists; a separate "Clear chosen" button reverts the decision.
+
+Rules when `chosen` is present:
+
+- **Never delete the other variants** on finalize. They stay in place. Only delete drafts if the user explicitly asks.
+- **The chosen variant is a spec, not production code.** Port it into real components; do not leave the draft in place.
+
+### Conversational finalize
+
+The user may also finalize in conversation ("use variant 02", "go with the cozy one"). In that case:
+
+1. Write `chosen.variantId` to the design's `index.json`.
+2. For `chosen.tweaks`, use the tweak values from the most recent viewer payload the user pasted (the `Active tweaks: …` line), if any. Otherwise ask the user to open the viewer and hit Finalize so the exact adjusted values are captured – or explicitly confirm that variant defaults are fine.
+3. Set `finalizedAt` to the current ISO timestamp.
+4. Do not touch the other variants' files.
+
 ## Approve and ship
 
-When the user picks a variant, switch out of design mode and treat the chosen HTML as a spec. Port the markup and styles into the real components. Do not leave the chosen draft as the implementation – it is a design artifact, not production code.
+Once a variant is finalized, hand off to the **`open-designer-integrate`** skill to port it into the codebase. The user can invoke it with phrases like "integrate the design", "implement the chosen design", or "ship the reading-streaks design".
+
+The integration skill reads `chosen` + `chosen.tweaks`, triages whether the work needs a full pipeline or a quick path, detects whether spechub is available, and orchestrates the port. It never modifies `.open-designer/` (except to mark `chosen.shippedAt`) and never deletes drafts without explicit confirmation.
+
+The chosen draft is a design artifact, not production code – do not leave it as the implementation.
 
 ## Reference shelf
 

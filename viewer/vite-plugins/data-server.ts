@@ -2,7 +2,7 @@
 // Matches the production launcher's routing so the viewer behaves identically
 // under `vite dev` and `node launcher/serve.mjs`.
 
-import { createReadStream, existsSync, readdirSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import type { Plugin } from "vite";
 
@@ -19,6 +19,61 @@ const MIME: Record<string, string> = {
 };
 
 export const DATA_CHANGED_EVENT = "open-designer:data-changed";
+
+// Merge a `chosen` payload into the design's index.json. Writes through a
+// temp file + rename so a concurrent reader never sees a half-written JSON.
+// `chosen: null` in the body clears the field.
+function handleFinalize(
+  req: import("node:http").IncomingMessage,
+  res: import("node:http").ServerResponse,
+  root: string,
+  design: string,
+): void {
+  const chunks: Buffer[] = [];
+  req.on("data", (c: Buffer) => chunks.push(c));
+  req.on("end", () => {
+    try {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+      const indexPath = join(root, "drafts", design, "index.json");
+      if (!indexPath.startsWith(root + sep)) {
+        res.statusCode = 403;
+        res.end("forbidden");
+        return;
+      }
+      if (!existsSync(indexPath)) {
+        res.statusCode = 404;
+        res.end("index.json not found");
+        return;
+      }
+      const current = JSON.parse(readFileSync(indexPath, "utf8"));
+      if (body.chosen === null) {
+        delete current.chosen;
+      } else if (body.chosen && typeof body.chosen === "object") {
+        current.chosen = {
+          variantId: String(body.chosen.variantId ?? ""),
+          tweaks:
+            body.chosen.tweaks && typeof body.chosen.tweaks === "object"
+              ? body.chosen.tweaks
+              : {},
+          finalizedAt: String(body.chosen.finalizedAt ?? new Date().toISOString()),
+          ...(body.chosen.shippedAt ? { shippedAt: String(body.chosen.shippedAt) } : {}),
+        };
+      } else {
+        res.statusCode = 400;
+        res.end("missing chosen");
+        return;
+      }
+      const tmp = indexPath + ".tmp";
+      writeFileSync(tmp, JSON.stringify(current, null, 2));
+      renameSync(tmp, indexPath);
+      res.setHeader("content-type", "application/json; charset=utf-8");
+      res.end(JSON.stringify({ ok: true, chosen: current.chosen ?? null }));
+    } catch (err) {
+      res.statusCode = 500;
+      res.end(`finalize failed: ${(err as Error).message}`);
+    }
+  });
+}
 
 export function dataServer(dataRoot: string): Plugin {
   const root = resolve(dataRoot);
@@ -43,6 +98,13 @@ export function dataServer(dataRoot: string): Plugin {
 
       server.middlewares.use("/data", (req, res, next) => {
         const url = (req.url || "/").split("?")[0];
+
+        // Finalize endpoint: POST /drafts/<design>/finalize
+        const finalizeMatch = url.match(/^\/drafts\/([^/]+)\/finalize$/);
+        if (finalizeMatch && req.method === "POST") {
+          handleFinalize(req, res, root, decodeURIComponent(finalizeMatch[1]));
+          return;
+        }
 
         // Synthesize project list from directory structure.
         if (url === "/drafts/" || url === "/drafts/index.json") {

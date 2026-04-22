@@ -157,7 +157,7 @@ function populateDesignSelect(): void {
   for (const p of projects) {
     const opt = document.createElement("option");
     opt.value = p.project;
-    opt.textContent = p.project;
+    opt.textContent = p.index.chosen ? `★ ${p.project}` : p.project;
     if (p.project === activeProject.project) opt.selected = true;
     designSelect.appendChild(opt);
   }
@@ -241,7 +241,75 @@ function renderPanel(): void {
       saveStoredValues(activeProject!.project, activeDraft!.id, tweakValues);
       applyTweaksToIframe(iframe, tweaks, tweakValues);
     },
+    chosenVariantId: activeProject.index.chosen?.variantId,
+    onFinalize: () => finalizeActive(),
+    onClearChosen: () => clearChosen(),
   });
+  renderChosenPill();
+}
+
+function renderChosenPill(): void {
+  let pill = document.getElementById("chosen-pill");
+  const show =
+    activeProject &&
+    activeDraft &&
+    activeProject.index.chosen?.variantId === activeDraft.id;
+  if (!show) {
+    pill?.remove();
+    return;
+  }
+  if (!pill) {
+    pill = document.createElement("div");
+    pill.id = "chosen-pill";
+    pill.textContent = "★ Chosen variant";
+    stage.appendChild(pill);
+  }
+}
+
+async function finalizeActive(): Promise<void> {
+  if (!activeProject || !activeDraft) return;
+  const payload = {
+    chosen: {
+      variantId: activeDraft.id,
+      tweaks: { ...tweakValues },
+      finalizedAt: new Date().toISOString(),
+    },
+  };
+  try {
+    const res = await fetch(`${DATA_ROOT}/drafts/${activeProject.project}/finalize`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    activeProject.index.chosen = payload.chosen;
+    populateDesignSelect();
+    renderPanel();
+    const label = activeDraft.label ?? activeDraft.id;
+    showToast(`Finalized – variant ${label} is the chosen design. Run the integration skill to port it.`);
+  } catch (err) {
+    console.error(err);
+    showToast(`Finalize failed: ${(err as Error).message}`);
+  }
+}
+
+async function clearChosen(): Promise<void> {
+  if (!activeProject) return;
+  try {
+    const res = await fetch(`${DATA_ROOT}/drafts/${activeProject.project}/finalize`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chosen: null }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    delete activeProject.index.chosen;
+    populateDesignSelect();
+    renderPanel();
+    showToast("Chosen variant cleared.");
+  } catch (err) {
+    console.error(err);
+    showToast(`Clear failed: ${(err as Error).message}`);
+  }
 }
 
 function togglePicker(force?: boolean): void {

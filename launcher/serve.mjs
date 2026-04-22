@@ -3,7 +3,7 @@
 // Serves the built viewer at / and .open-designer/ at /data/.
 
 import { createServer } from "node:http";
-import { readFile, stat, readdir } from "node:fs/promises";
+import { readFile, stat, readdir, writeFile, rename } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,11 +73,63 @@ async function maybeServeProjectIndex(res, urlPath) {
   return true;
 }
 
+async function readBody(req) {
+  const chunks = [];
+  for await (const c of req) chunks.push(c);
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+// Merge a `chosen` payload into a design's index.json atomically.
+async function handleFinalize(req, res, design) {
+  try {
+    const indexPath = safeJoin(DATA_ROOT, `drafts/${design}/index.json`);
+    if (!indexPath) {
+      res.writeHead(403);
+      return res.end("Forbidden");
+    }
+    if (!existsSync(indexPath)) {
+      res.writeHead(404);
+      return res.end("index.json not found");
+    }
+    const body = JSON.parse((await readBody(req)) || "{}");
+    const current = JSON.parse(await readFile(indexPath, "utf8"));
+    if (body.chosen === null) {
+      delete current.chosen;
+    } else if (body.chosen && typeof body.chosen === "object") {
+      current.chosen = {
+        variantId: String(body.chosen.variantId ?? ""),
+        tweaks:
+          body.chosen.tweaks && typeof body.chosen.tweaks === "object"
+            ? body.chosen.tweaks
+            : {},
+        finalizedAt: String(body.chosen.finalizedAt ?? new Date().toISOString()),
+        ...(body.chosen.shippedAt ? { shippedAt: String(body.chosen.shippedAt) } : {}),
+      };
+    } else {
+      res.writeHead(400);
+      return res.end("missing chosen");
+    }
+    const tmp = indexPath + ".tmp";
+    await writeFile(tmp, JSON.stringify(current, null, 2));
+    await rename(tmp, indexPath);
+    res.writeHead(200, { "Content-Type": MIME[".json"] });
+    res.end(JSON.stringify({ ok: true, chosen: current.chosen ?? null }));
+  } catch (err) {
+    res.writeHead(500);
+    res.end(`finalize failed: ${err.message}`);
+  }
+}
+
 async function handle(req, res) {
   const url = new URL(req.url, "http://localhost");
   let pathname = url.pathname;
 
   if (pathname === "/") pathname = "/index.html";
+
+  const finalizeMatch = pathname.match(/^\/data\/drafts\/([^/]+)\/finalize$/);
+  if (finalizeMatch && req.method === "POST") {
+    return handleFinalize(req, res, decodeURIComponent(finalizeMatch[1]));
+  }
 
   if (await maybeServeProjectIndex(res, pathname)) return;
 

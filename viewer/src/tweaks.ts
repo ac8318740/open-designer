@@ -136,8 +136,22 @@ export function renderTweaksPanel(args: {
   tweaks: Tweak[];
   values: Record<string, string>;
   onChange: (id: string, value: string) => void;
+  chosenVariantId?: string;
+  onFinalize?: () => void;
+  onClearChosen?: () => void;
 }): void {
-  const { root, variants, activeVariant, onVariant, tweaks, values, onChange } = args;
+  const {
+    root,
+    variants,
+    activeVariant,
+    onVariant,
+    tweaks,
+    values,
+    onChange,
+    chosenVariantId,
+    onFinalize,
+    onClearChosen,
+  } = args;
   root.innerHTML = "";
 
   if (variants.length > 1) {
@@ -149,7 +163,7 @@ export function renderTweaksPanel(args: {
     for (const v of variants) {
       const opt = document.createElement("option");
       opt.value = v.id;
-      opt.textContent = v.label;
+      opt.textContent = v.id === chosenVariantId ? `${v.label} ★` : v.label;
       if (v.id === activeVariant) opt.selected = true;
       select.appendChild(opt);
     }
@@ -163,11 +177,34 @@ export function renderTweaksPanel(args: {
     empty.className = "tweak-empty";
     empty.textContent = "No tweaks declared for this draft.";
     root.appendChild(empty);
-    return;
+  } else {
+    for (const tweak of tweaks) {
+      root.appendChild(renderTweak(tweak, values[tweak.id] ?? defaultFor(tweak), onChange));
+    }
   }
 
-  for (const tweak of tweaks) {
-    root.appendChild(renderTweak(tweak, values[tweak.id] ?? defaultFor(tweak), onChange));
+  if (onFinalize) {
+    const actions = document.createElement("div");
+    actions.className = "tweak-finalize";
+    const isChosen = chosenVariantId === activeVariant;
+
+    const finalizeBtn = document.createElement("button");
+    finalizeBtn.type = "button";
+    finalizeBtn.className = "primary";
+    finalizeBtn.textContent = isChosen ? "Re-finalize with current tweaks" : "Finalize this";
+    finalizeBtn.addEventListener("click", () => onFinalize());
+    actions.appendChild(finalizeBtn);
+
+    if (chosenVariantId && onClearChosen) {
+      const clearBtn = document.createElement("button");
+      clearBtn.type = "button";
+      clearBtn.className = "tweak-clear-chosen";
+      clearBtn.textContent = "Clear chosen";
+      clearBtn.addEventListener("click", () => onClearChosen());
+      actions.appendChild(clearBtn);
+    }
+
+    root.appendChild(actions);
   }
 }
 

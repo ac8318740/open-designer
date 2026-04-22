@@ -30,11 +30,19 @@ export interface DraftEntry {
   tweaks?: Tweak[];
 }
 
+export interface Chosen {
+  variantId: string;
+  tweaks: Record<string, string>;
+  finalizedAt: string;
+  shippedAt?: string;
+}
+
 export interface DraftIndex {
   project: string;
   updated?: string;
   tweaks?: Tweak[]; // project-level tweaks, apply to every variant
   drafts: DraftEntry[];
+  chosen?: Chosen;
 }
 
 export interface SelectionSnapshot {
