@@ -6,10 +6,12 @@ No hosted backend. No API key billed by a third party. No cloud canvas. Just fil
 
 ## What you get
 
-- A skill (`design`) that teaches Claude how to gather UI context, write pixel-perfect HTML drafts, and iterate based on pasted feedback. A companion skill (`design-integrate`) ports a finalized variant into the real codebase.
-- A static viewer that renders the drafts in an iframe grid.
+- A `design-system` skill that captures the project's tokens, voice, rules, and gaps as a first-class artifact under `.open-designer/design-systems/<name>/` with a runnable `tokens.css` and playable pages.
+- A `design` skill that teaches Claude how to consume the DS on every iteration, write pixel-perfect HTML designs, and iterate based on pasted feedback.
+- A `design-integrate` skill that ports a finalized design into the real codebase – DS first, then per-page surfaces.
+- A static viewer with two modes (Designs / Design systems). Iterate on designs or on the DS itself by selecting elements and pasting feedback.
 - An element picker overlay that captures a stable selector, the outer HTML, and key computed styles, then puts a Markdown payload on your clipboard.
-- A zero-dependency Node launcher that serves the viewer and the drafts folder from the same origin.
+- A zero-dependency Node launcher that serves the viewer and the data folder from the same origin.
 
 ## Install
 
@@ -17,23 +19,26 @@ This plugin ships through the `ac8318740-plugins` marketplace. After adding the 
 
 ## Use
 
-1. Ask Claude to design or iterate on a page. The skill triggers automatically.
-2. Claude writes drafts to `.open-designer/drafts/<project>/` and an `index.json` listing them.
-3. Run the viewer:
+1. Run `/design-system` once per project to capture the design system (or point at an existing one).
+2. Ask Claude to design or iterate on a page. The `design` skill triggers automatically and reads from the active DS.
+3. Claude writes designs to `.open-designer/designs/<name>/` and an `index.json` listing them.
+4. Run the viewer:
 
    ```
    node plugins/open-designer/launcher/serve.mjs
    ```
 
    It picks a free port, serves the viewer at `/`, exposes `.open-designer/` at `/data/`, and opens your browser.
-4. Click any element in any draft. Type your intent. Hit copy. Paste into Claude Code. Claude edits the target draft.
+5. Click any element in any design. Type your intent. Hit copy. Paste into Claude Code. Claude edits the target design.
+6. In Design systems mode, tweak tokens and click Promote to write values back to `tokens.css`.
 
 ## Layout
 
 ```
 .claude-plugin/plugin.json   – manifest
+skills/design-system/        – create / edit / list design systems
 skills/design/               – the design-loop workflow Claude follows
-skills/design-integrate/     – port a finalized variant into the codebase
+skills/design-integrate/     – port a finalized design into the codebase
 viewer/                      – static viewer (Vite build)
 launcher/serve.mjs           – zero-dep static server
 LICENSE                      – MIT

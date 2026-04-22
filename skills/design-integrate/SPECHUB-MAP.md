@@ -16,15 +16,18 @@ Any of these → **soft integration mode**.
 
 ### `/spechub:propose`
 
-Synthesize a proposal from the exploration outputs and the resolved HTML reference. The prompt you feed spechub:
+Synthesize a proposal from the exploration outputs and the resolved DS bundle. The prompt you feed spechub:
 
 ```
-Integrate the open-designer variant "<variantId>" from design
-"<design>" into the codebase.
+Integrate the open-designer page "<pageId>" of design "<design>" into
+the codebase.
 
 Design context:
-- Resolved HTML reference: <temp path>
-- Init files: .open-designer/init/*.md, .open-designer/design-system.md
+- Resolved DS bundle: <bundle path>
+  - tokens.css, voice.md, rules.md, gaps.md, components.md,
+    routes.md, layouts.md, theme.md (all extends-resolved)
+- Resolved design HTML: <bundle>/resolved/<pageId>.html
+- Matched DS playable page: <bundle>/pages/<pageId>.html
 - Tweak overrides to bake in: <chosen.tweaks as key=value list>
 
 Backend gaps (must be addressed by this proposal):
@@ -34,12 +37,19 @@ Target route / component (from clarification round):
 - <user's chosen route>
 - <user's chosen component strategy>
 
+Navigation mapping (data-od-page → real-app primitive):
+- <list from clarification round>
+
 Real copy / data sources:
 - <answers from clarification round>
 
-Keep design-system fidelity – use only tokens already declared in
-.open-designer/design-system.md. Do not invent new tokens unless the
-user explicitly approves.
+DS fidelity – use only tokens in <bundle>/tokens.css. Apply voice.md
+and rules.md to every ported surface. Do not invent new tokens unless
+the user explicitly approves.
+
+If the DS has not yet shipped into this codebase (no manifest.shippedAt),
+Stage 1 of design-integrate has already handled that – the codebase's
+tokens.css and doc locations are noted in the clarification answers.
 ```
 
 ### `/spechub:design`
@@ -57,19 +67,22 @@ Launch the implementation loop. Stay available to answer context questions that 
 Skip propose/design. Feed the same bundled context but compressed:
 
 ```
-Quick-path integration of open-designer variant "<variantId>" from
-design "<design>".
+Quick-path integration of open-designer page "<pageId>" of design
+"<design>".
 
 Scope:
 - <one-line description of the change>
 
 Design context:
-- Resolved HTML reference: <temp path>
+- Resolved DS bundle: <bundle path>
+- Resolved design HTML: <bundle>/resolved/<pageId>.html
+- Matched DS playable page: <bundle>/pages/<pageId>.html
 - Tweak overrides: <chosen.tweaks as key=value list>
 - Target: <component path>
+- Navigation mapping: <list>
 
-Design-system fidelity – use only tokens in
-.open-designer/design-system.md.
+DS fidelity – use only tokens in <bundle>/tokens.css. Apply voice.md
+and rules.md.
 ```
 
 ## Full pipeline + no spechub
@@ -79,7 +92,7 @@ Orchestrate subagents directly.
 1. **test-writer agent** (`subagent_type: "spechub:test-writer"` if available, else `general-purpose`):
    ```
    Write failing tests for this behavior. The behavior is described by:
-   - Resolved design reference: <temp path>
+   - Resolved design HTML: <bundle>/resolved/<pageId>.html
    - Backend gaps to cover: <list>
    - User's clarified intent: <answers>
 
@@ -90,8 +103,10 @@ Orchestrate subagents directly.
 2. **task-executor agent** (`subagent_type: "spechub:task-executor"` if available, else `general-purpose`):
    ```
    Make these failing tests pass. Tests are at <paths>. Design
-   reference at <temp path>. Do not modify the tests. Use only tokens
-   in .open-designer/design-system.md for visual work.
+   reference at <bundle>/resolved/<pageId>.html. Matched DS playable
+   page at <bundle>/pages/<pageId>.html. Do not modify the tests. Use
+   only tokens in <bundle>/tokens.css for visual work. Apply rules
+   from <bundle>/rules.md and voice from <bundle>/voice.md.
    ```
 
 3. **task-checker agent** (`subagent_type: "spechub:task-checker"` if available, else `general-purpose`):
@@ -101,7 +116,9 @@ Orchestrate subagents directly.
    - Typecheck clean
    - Lint clean
    - No regressions in existing tests
-   - Visual match against <temp path>
+   - Visual match against <bundle>/resolved/<pageId>.html
+   - Rules-lint pass against <bundle>/rules.md (gradients, accents,
+     casing, punctuation)
    ```
 
 ## Quick path + no spechub
@@ -111,25 +128,30 @@ Skip test-writing for purely visual pieces.
 1. **task-executor** directly:
    ```
    Apply this visual change to <component path>. Design reference at
-   <temp path>. Tweak overrides: <key=value list>. Use only tokens
-   in .open-designer/design-system.md.
+   <bundle>/resolved/<pageId>.html. Tweak overrides: <key=value list>.
+   Use only tokens in <bundle>/tokens.css. Apply rules from
+   <bundle>/rules.md and voice from <bundle>/voice.md. Reuse the
+   codebase components Agent 2 identified before creating new ones.
+   Drop any data-od-page attributes from the shipped code; replace
+   with the framework's nav primitive per the clarification answers.
    ```
 
 2. **task-checker**:
    ```
    Verify <paths>. Typecheck + lint + existing tests + visual match
-   against <temp path>.
+   against <bundle>/resolved/<pageId>.html. Rules-lint pass against
+   <bundle>/rules.md – flag violations as warnings.
    ```
 
 3. **frontend-verifier** (if available as `spechub:frontend-verifier`):
    ```
    Navigate to <route> after `npm run dev` and snapshot. Compare
-   layout, colors, copy structure against <temp path>.
+   layout, colors, copy structure against <bundle>/resolved/<pageId>.html.
    ```
 
 ## Notes
 
-- Never paste the resolved HTML into the prompt. Always reference by path. HTML can be large and pasting it blows the context budget.
+- Never paste the resolved HTML or the DS bundle files into prompts. Always reference by path. HTML and CSS can be large and pasting them blows the context budget.
 - Always bundle the `chosen.tweaks` as a short key=value list – that is the exact visual state the user approved, and it's small enough to include inline.
 - When both spechub and agent-browser are available, use the `spechub:browser-verify` skill for the visual verification step.
 - If a subagent says "I don't have access to X", do not switch to a hack – stop and ask the user. Most of the time the right answer is "the user didn't run the dev server" or "spechub isn't installed here", which is a clarify-and-re-run, not a workaround.

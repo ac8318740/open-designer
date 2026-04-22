@@ -11,6 +11,14 @@
       <div class="brand-group">
         <div class="brand">open-designer</div>
         <span id="project-label" class="with-left-divider"></span>
+        <div class="mode-toggle with-left-divider" id="mode-toggle" role="tablist" aria-label="Viewer mode">
+          <button id="mode-designs" type="button" role="tab" aria-selected="true" data-mode="designs">Designs</button>
+          <button id="mode-design-systems" type="button" role="tab" aria-selected="false" data-mode="design-systems">Design systems</button>
+        </div>
+        <div class="select-with-caption with-left-divider" id="ds-select-group">
+          <span class="select-caption" aria-hidden="true">Design system</span>
+          <select id="ds-select" title="Switch design system" aria-label="Design system"></select>
+        </div>
         <div class="select-with-caption with-left-divider" id="design-select-group">
           <span class="select-caption" aria-hidden="true">Design</span>
           <select id="design-select" title="Switch design" aria-label="Design"></select>
@@ -35,21 +43,28 @@
             <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4"/>
           </svg>
         </button>
-        <button id="refresh-btn" type="button" title="Reload drafts">Refresh</button>
+        <button id="refresh-btn" type="button" title="Reload designs">Refresh</button>
       </div>
     </header>
     <main id="stage">
       <iframe id="draft-frame" loading="eager"></iframe>
       <div id="empty-state" class="empty" hidden>
         <div class="empty-card">
-          <h1>No drafts yet</h1>
-          <p>open-designer is a local design loop. Claude writes HTML drafts, you click elements to iterate – no cloud canvas, no backend.</p>
+          <h1>No designs yet</h1>
+          <p>open-designer is a local design loop. Claude writes HTML designs, you click elements to iterate – no cloud canvas, no backend.</p>
           <ol>
             <li>Ask Claude to design a page or component. Describe what you want.</li>
-            <li>Drafts appear here automatically as Claude saves them.</li>
+            <li>Designs appear here automatically as Claude saves them.</li>
             <li>Toggle <strong>Select Elements</strong>, click what you want changed, type your feedback, paste the copied Markdown back into Claude.</li>
           </ol>
-          <p class="empty-foot">Drafts live under <code>.open-designer/drafts/&lt;project&gt;/</code>. This tab auto-refreshes when files change.</p>
+          <p class="empty-foot">Designs live under <code>.open-designer/designs/&lt;name&gt;/</code>. This tab auto-refreshes when files change.</p>
+        </div>
+      </div>
+      <div id="empty-state-ds" class="empty" hidden>
+        <div class="empty-card">
+          <h1>No design systems yet</h1>
+          <p>A design system is the tokens, voice, rules, and playable pages that every design reads from. Run <code>/design-system</code> in Claude Code to create one.</p>
+          <p class="empty-foot">Design systems live under <code>.open-designer/design-systems/&lt;name&gt;/</code>.</p>
         </div>
       </div>
     </main>

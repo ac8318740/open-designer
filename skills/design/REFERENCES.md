@@ -5,10 +5,10 @@ explicitly asks for a particular aesthetic ("make it feel more like
 shadcn", "use a Magic UI animation here") or when working greenfield
 without an existing design system.
 
-**This shelf is opt-in.** When working on existing UI, fidelity to
-`.open-designer/design-system.md` always wins. Do not pull from these
-sources unless the user has named them or the project has no design
-system to anchor against.
+**This shelf is opt-in.** When working on existing UI, fidelity to the
+active design system under `.open-designer/design-systems/<name>/`
+always wins. Do not pull from these sources unless the user has named
+them or the project has no design system yet.
 
 Every source listed here ships under MIT, Apache-2.0, BSD, or ISC and
 has been audited at the library or component level. If you want to use
@@ -29,9 +29,9 @@ be vendored.
 4. If you do vendor markup or styles into the user's repo (not just into
    a draft), add the source's attribution line to the project's
    `THIRD_PARTY_NOTICES.md`. The attribution string is in the table.
-5. Re-read `.open-designer/design-system.md` and rewrite the snippet
-   using only allowed tokens. The reference's color palette and font
-   choices do not override the user's system.
+5. Re-read the active DS's `tokens.css` + `voice.md` + `rules.md` and
+   rewrite the snippet using only allowed tokens. The reference's
+   color palette and font choices do not override the user's system.
 
 ---
 

@@ -151,6 +151,8 @@ export function renderTweaksPanel(args: {
   onFinalize?: () => void;
   onFinalizeAll?: () => void;
   onClearChosen?: () => void;
+  showPromote?: boolean;
+  onPromote?: (tweak: Tweak) => void;
 }): void {
   const {
     root,
@@ -166,6 +168,8 @@ export function renderTweaksPanel(args: {
     onFinalize,
     onFinalizeAll,
     onClearChosen,
+    showPromote,
+    onPromote,
   } = args;
   root.innerHTML = "";
 
@@ -194,7 +198,12 @@ export function renderTweaksPanel(args: {
     root.appendChild(empty);
   } else {
     for (const tweak of tweaks) {
-      root.appendChild(renderTweak(tweak, values[tweak.id] ?? defaultFor(tweak), onChange));
+      root.appendChild(
+        renderTweak(tweak, values[tweak.id] ?? defaultFor(tweak), onChange, {
+          showPromote,
+          onPromote,
+        }),
+      );
     }
   }
 
@@ -239,14 +248,30 @@ function renderTweak(
   tweak: Tweak,
   value: string,
   onChange: (id: string, value: string) => void,
+  opts: {
+    showPromote?: boolean;
+    onPromote?: (tweak: Tweak) => void;
+  } = {},
 ): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = `tweak tweak-${tweak.type}`;
 
+  const labelRow = document.createElement("div");
+  labelRow.className = "tweak-label-row";
   const label = document.createElement("label");
   label.textContent = tweak.label;
   label.htmlFor = `tweak-${tweak.id}`;
-  wrap.appendChild(label);
+  labelRow.appendChild(label);
+  if (opts.showPromote && opts.onPromote) {
+    const promote = document.createElement("button");
+    promote.type = "button";
+    promote.className = "tweak-promote";
+    promote.textContent = "Promote";
+    promote.title = `Write this value into tokens.css at ${tweak.target}`;
+    promote.addEventListener("click", () => opts.onPromote?.(tweak));
+    labelRow.appendChild(promote);
+  }
+  wrap.appendChild(labelRow);
 
   let control: HTMLElement;
   switch (tweak.type) {

@@ -22,3 +22,10 @@ export function applyFinalizeBody(
   existing: unknown,
   body: Record<string, unknown>,
 ): { chosen?: ChosenBlock | null; error?: string };
+
+export function patchTokenInCss(css: string, target: string, value: string): string;
+
+export function applyPromoteBody(
+  currentCss: string,
+  body: Record<string, unknown>,
+): { css?: string; error?: string };

@@ -23,7 +23,7 @@ export interface Tweak {
   off?: string;
 }
 
-export interface DraftEntry {
+export interface VariantEntry {
   id: string;
   file: string;
   label?: string;
@@ -34,7 +34,7 @@ export interface Page {
   id: string;
   label?: string;
   tweaks?: Tweak[];
-  variants: DraftEntry[];
+  variants: VariantEntry[];
 }
 
 export interface ChosenPage {
@@ -48,19 +48,23 @@ export interface Chosen {
   pages: Record<string, ChosenPage>;
 }
 
-export interface DraftIndex {
-  project: string;
+export interface DesignIndex {
+  design?: string;
+  // Legacy `project` field kept so older index.json files still parse. New
+  // designs write `design`. Read code should prefer `design ?? project`.
+  project?: string;
+  designSystem?: string;
   updated?: string;
-  tweaks?: Tweak[]; // project-level tweaks, apply to every variant
+  tweaks?: Tweak[]; // design-level tweaks
   pages?: Page[];        // new shape
-  drafts?: DraftEntry[]; // legacy shape, read-only
+  drafts?: VariantEntry[]; // legacy shape, read-only
   chosen?: Chosen | LegacyChosen;
 }
 
 // Post-normalize shape. `chosen` is narrowed to the new `Chosen` form, and
 // `drafts` is dropped because `pages` is the only source of truth after
-// normalize. Only the raw fetch boundary should handle `DraftIndex`.
-export interface NormalizedIndex extends Omit<DraftIndex, "chosen" | "drafts"> {
+// normalize. Only the raw fetch boundary should handle `DesignIndex`.
+export interface NormalizedIndex extends Omit<DesignIndex, "chosen" | "drafts"> {
   pages: Page[];
   chosen?: Chosen;
 }
@@ -83,7 +87,33 @@ export interface SelectionSnapshot {
   element: HTMLElement;
 }
 
-export interface ProjectEntry {
-  project: string;
-  index: DraftIndex;
+export interface DesignEntry {
+  design: string;
+  index: DesignIndex;
 }
+
+// Design system types -------------------------------------------------------
+
+export interface DesignSystemManifest {
+  name: string;
+  description?: string;
+  extends?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  shippedAt?: string;
+  shippedTo?: string;
+}
+
+export interface DesignSystemIndexPages {
+  designSystem?: string;
+  updated?: string;
+  pages?: Page[];
+}
+
+export interface DesignSystemEntry {
+  name: string;
+  manifest: DesignSystemManifest;
+  pages: Page[];
+}
+
+export type ViewerMode = "designs" | "design-systems";

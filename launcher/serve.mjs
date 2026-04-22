@@ -8,7 +8,7 @@ import { existsSync } from "node:fs";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import { applyFinalizeBody, isValidDesignName } from "./finalize.mjs";
+import { applyFinalizeBody, applyPromoteBody, isValidDesignName } from "./finalize.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const PLUGIN_ROOT = resolve(__dirname, "..");
@@ -19,7 +19,7 @@ const VIEWER_DIST = join(PLUGIN_ROOT, "viewer", "dist");
 const VIEWER_SRC = join(PLUGIN_ROOT, "viewer");
 const VIEWER_ROOT = existsSync(join(VIEWER_DIST, "index.html")) ? VIEWER_DIST : VIEWER_SRC;
 
-// Drafts live in the repo's working directory.
+// Designs + design systems live in the repo's working directory.
 const DATA_ROOT = join(REPO_CWD, ".open-designer");
 
 const MIME = {
@@ -58,19 +58,58 @@ async function serveFile(res, absPath) {
   }
 }
 
-// Synthesize /data/drafts/index.json by listing project subdirectories.
-async function maybeServeProjectIndex(res, urlPath) {
-  if (urlPath !== "/data/drafts/index.json" && urlPath !== "/data/drafts/") return false;
-  const draftsRoot = join(DATA_ROOT, "drafts");
-  if (!existsSync(draftsRoot)) {
+// Synthesize /data/designs/index.json by listing design subdirectories.
+// Accepts the legacy /drafts/ path as a read-only alias.
+async function maybeServeDesignIndex(res, urlPath) {
+  const isDesigns =
+    urlPath === "/data/designs/index.json" || urlPath === "/data/designs/";
+  if (!isDesigns) return false;
+  const root = join(DATA_ROOT, "designs");
+  if (!existsSync(root)) {
     res.writeHead(200, { "Content-Type": MIME[".json"] });
-    res.end(JSON.stringify({ projects: [] }));
+    res.end(JSON.stringify({ designs: [] }));
     return true;
   }
-  const entries = await readdir(draftsRoot, { withFileTypes: true });
-  const projects = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+  const entries = await readdir(root, { withFileTypes: true });
+  const names = entries.filter((e) => e.isDirectory()).map((e) => e.name);
   res.writeHead(200, { "Content-Type": MIME[".json"], "Cache-Control": "no-store" });
-  res.end(JSON.stringify({ projects }));
+  res.end(JSON.stringify({ designs: names }));
+  return true;
+}
+
+// Synthesize /data/design-systems/index.json from the manifest of each DS.
+async function maybeServeDsIndex(res, urlPath) {
+  const isDs =
+    urlPath === "/data/design-systems/index.json" ||
+    urlPath === "/data/design-systems/";
+  if (!isDs) return false;
+  const root = join(DATA_ROOT, "design-systems");
+  if (!existsSync(root)) {
+    res.writeHead(200, { "Content-Type": MIME[".json"] });
+    res.end(JSON.stringify({ designSystems: [] }));
+    return true;
+  }
+  const entries = await readdir(root, { withFileTypes: true });
+  const out = [];
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    const manifestPath = join(root, e.name, "manifest.json");
+    if (!existsSync(manifestPath)) continue;
+    try {
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      out.push({
+        name: String(manifest.name ?? e.name),
+        description: manifest.description ?? null,
+        extends: manifest.extends ?? null,
+        updatedAt: manifest.updatedAt ?? null,
+      });
+    } catch {
+      // Skip unreadable manifests – log but don't fail the whole listing.
+      console.warn(`Skipping DS ${e.name}: unreadable manifest.`);
+    }
+  }
+  res.writeHead(200, { "Content-Type": MIME[".json"], "Cache-Control": "no-store" });
+  res.end(JSON.stringify({ designSystems: out }));
   return true;
 }
 
@@ -80,15 +119,25 @@ async function readBody(req) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-// Merge a `chosen` payload into a design's index.json atomically.
-// Body shapes and merge logic live in finalize.mjs (shared with
-// data-server.ts).
+// Atomic-write helper – write to `.tmp` then rename. Used by finalize + promote
+// so a concurrent reader never sees a half-written file.
+async function atomicWrite(path, content) {
+  const tmp = path + ".tmp";
+  try {
+    await writeFile(tmp, content);
+    await rename(tmp, path);
+  } catch (err) {
+    try { await unlink(tmp); } catch { /* ignore */ }
+    throw err;
+  }
+}
+
 async function handleFinalize(req, res, design) {
   if (!isValidDesignName(design)) {
     res.writeHead(400);
     return res.end("invalid design name");
   }
-  const indexPath = safeJoin(DATA_ROOT, `drafts/${design}/index.json`);
+  const indexPath = safeJoin(DATA_ROOT, `designs/${design}/index.json`);
   if (!indexPath) {
     res.writeHead(403);
     return res.end("Forbidden");
@@ -97,7 +146,6 @@ async function handleFinalize(req, res, design) {
     res.writeHead(404);
     return res.end("index.json not found");
   }
-  const tmp = indexPath + ".tmp";
   try {
     const body = JSON.parse((await readBody(req)) || "{}");
     const current = JSON.parse(await readFile(indexPath, "utf8"));
@@ -111,15 +159,54 @@ async function handleFinalize(req, res, design) {
     } else {
       current.chosen = merged.chosen;
     }
-    await writeFile(tmp, JSON.stringify(current, null, 2));
-    await rename(tmp, indexPath);
+    await atomicWrite(indexPath, JSON.stringify(current, null, 2));
     res.writeHead(200, { "Content-Type": MIME[".json"] });
     res.end(JSON.stringify({ ok: true, chosen: current.chosen ?? null }));
   } catch (err) {
-    // Clean up the temp file if the rename never happened.
-    try { await unlink(tmp); } catch { /* ignore */ }
     res.writeHead(500);
     res.end(`finalize failed: ${err.message}`);
+  }
+}
+
+async function handlePromote(req, res, ds) {
+  if (!isValidDesignName(ds)) {
+    res.writeHead(400);
+    return res.end("invalid ds name");
+  }
+  const tokensPath = safeJoin(DATA_ROOT, `design-systems/${ds}/tokens.css`);
+  const manifestPath = safeJoin(DATA_ROOT, `design-systems/${ds}/manifest.json`);
+  if (!tokensPath || !manifestPath) {
+    res.writeHead(403);
+    return res.end("Forbidden");
+  }
+  if (!existsSync(tokensPath)) {
+    res.writeHead(404);
+    return res.end("tokens.css not found");
+  }
+  try {
+    const body = JSON.parse((await readBody(req)) || "{}");
+    const css = await readFile(tokensPath, "utf8");
+    const patched = applyPromoteBody(css, body);
+    if (patched.error) {
+      res.writeHead(400);
+      return res.end(patched.error);
+    }
+    await atomicWrite(tokensPath, patched.css);
+    // Bump manifest.updatedAt.
+    if (existsSync(manifestPath)) {
+      try {
+        const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+        manifest.updatedAt = new Date().toISOString();
+        await atomicWrite(manifestPath, JSON.stringify(manifest, null, 2));
+      } catch (err) {
+        console.warn(`Promote: failed to bump manifest: ${err.message}`);
+      }
+    }
+    res.writeHead(200, { "Content-Type": MIME[".json"] });
+    res.end(JSON.stringify({ ok: true }));
+  } catch (err) {
+    res.writeHead(500);
+    res.end(`promote failed: ${err.message}`);
   }
 }
 
@@ -129,12 +216,18 @@ async function handle(req, res) {
 
   if (pathname === "/") pathname = "/index.html";
 
-  const finalizeMatch = pathname.match(/^\/data\/drafts\/([^/]+)\/finalize$/);
-  if (finalizeMatch && req.method === "POST") {
-    return handleFinalize(req, res, decodeURIComponent(finalizeMatch[1]));
+  const designFinalize = pathname.match(/^\/data\/designs\/([^/]+)\/finalize$/);
+  if (designFinalize && req.method === "POST") {
+    return handleFinalize(req, res, decodeURIComponent(designFinalize[1]));
   }
 
-  if (await maybeServeProjectIndex(res, pathname)) return;
+  const dsPromote = pathname.match(/^\/data\/design-systems\/([^/]+)\/promote$/);
+  if (dsPromote && req.method === "POST") {
+    return handlePromote(req, res, decodeURIComponent(dsPromote[1]));
+  }
+
+  if (await maybeServeDesignIndex(res, pathname)) return;
+  if (await maybeServeDsIndex(res, pathname)) return;
 
   if (pathname.startsWith("/data/")) {
     const rel = pathname.slice("/data/".length);
@@ -162,7 +255,6 @@ async function handle(req, res) {
     return res.end("Not found");
   }
 
-  // Serve viewer root.
   const abs = safeJoin(VIEWER_ROOT, pathname.slice(1));
   if (!abs) {
     res.writeHead(403);
@@ -213,6 +305,6 @@ const url = `http://127.0.0.1:${port}/`;
 
 console.log(`open-designer viewer → ${url}`);
 console.log(`  viewer:  ${VIEWER_ROOT}`);
-console.log(`  drafts:  ${DATA_ROOT}`);
+console.log(`  data:    ${DATA_ROOT}`);
 
 if (!process.env.OPEN_DESIGNER_NO_OPEN) openBrowser(url);

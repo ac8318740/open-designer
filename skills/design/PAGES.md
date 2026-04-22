@@ -20,7 +20,7 @@ Request: "Design the meeting log and the note detail screen."
 
 - **Pages**: `log` (scrollable list of meetings), `detail` (single meeting with full notes).
 - **Variants** per page: 2–4 styling alternatives.
-- **Navigation**: each row in the log gets `data-od-link="detail"`. The detail page gets a back link (arrow or chevron, whatever the design calls for) with `data-od-link="log"`.
+- **Navigation**: each row in the log gets `data-od-page="detail"`. The detail page gets a back link (arrow or chevron) with `data-od-page="log"`.
 
 Do **not** spawn one detail page per list row. Six meetings in the log still link to one detail page – pick plausible distinct titles, but they all go to the same screen. Parametric detail rendering is a real-app concern, not a draft concern.
 
@@ -29,14 +29,14 @@ Do **not** spawn one detail page per list row. Six meetings in the log still lin
 Request: "Design the settings page with Profile, Notifications, Billing tabs."
 
 - **Pages**: `profile`, `notifications`, `billing`.
-- **Navigation**: the tab bar is shared across all three. Each tab is a `data-od-link` to its sibling page. Mark the active tab by styling the current tab differently per file – no runtime state needed, the viewer just swaps iframes.
+- **Navigation**: the tab bar is shared across all three. Each tab is a `data-od-page` to its sibling page. Mark the active tab by styling the current tab differently per file – no runtime state needed, the viewer just swaps iframes.
 
 ### 3. Wizard steps
 
 Request: "Design the onboarding – three steps."
 
 - **Pages**: `step-1-name`, `step-2-workspace`, `step-3-invite`.
-- **Navigation**: "Next" buttons get `data-od-link="step-2-workspace"` etc. "Back" links get the previous step's id.
+- **Navigation**: "Next" buttons get `data-od-page="step-2-workspace"` etc. "Back" links get the previous step's id.
 
 ### 4. Modal open
 
@@ -56,17 +56,17 @@ Request: "Design sign-in, sign-up, and forgot-password."
 
 ## Navigation contract
 
-Any element the user would click to move between screens gets `data-od-link="<pageId>"`.
+Any element the user would click to move between screens gets `data-od-page="<pageId>"`.
 
 ```html
-<a href="#" data-od-link="detail">Team sync – Tuesday</a>
-<button data-od-link="detail">Open note</button>
-<a href="#" data-od-link="detail:02-focus">Pin a specific variant</a>
-<a href="#" data-od-link="log">← Back</a>
+<a href="#" data-od-page="detail">Team sync – Tuesday</a>
+<button data-od-page="detail">Open note</button>
+<a href="#" data-od-page="detail:02-focus">Pin a specific variant</a>
+<a href="#" data-od-page="log">← Back</a>
 ```
 
-- `data-od-link="pageId"` → target page's last-active variant (or its first).
-- `data-od-link="pageId:variantId"` → a specific variant, useful when one flow should always land on a particular treatment.
+- `data-od-page="pageId"` → target page's last-active variant (or its first).
+- `data-od-page="pageId:variantId"` → a specific variant, useful when one flow should always land on a particular treatment.
 
 Wire obvious connections by default. Do not wait for the user to ask for navigation – if the real app would navigate there, the draft should too.
 

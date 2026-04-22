@@ -6,8 +6,8 @@ import { createReadStream, existsSync, readdirSync, readFileSync, renameSync, st
 import { extname, join, normalize, resolve, sep } from "node:path";
 import type { Plugin } from "vite";
 // Shared with serve.mjs via a .mjs module + .d.ts sidecar (zero-dep launcher
-// can't consume TS). Single source of truth for the finalize merge logic.
-import { applyFinalizeBody, isValidDesignName } from "../../launcher/finalize.mjs";
+// can't consume TS). Single source of truth for finalize + promote merge logic.
+import { applyFinalizeBody, applyPromoteBody, isValidDesignName } from "../../launcher/finalize.mjs";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -23,10 +23,17 @@ const MIME: Record<string, string> = {
 
 export const DATA_CHANGED_EVENT = "open-designer:data-changed";
 
-// Merge a `chosen` payload into the design's index.json. Writes through a
-// temp file + rename so a concurrent reader never sees a half-written JSON.
-// Body shapes and merge logic live in launcher/finalize.mjs (shared with the
-// production launcher).
+function atomicWriteSync(path: string, content: string): void {
+  const tmp = path + ".tmp";
+  try {
+    writeFileSync(tmp, content);
+    renameSync(tmp, path);
+  } catch (err) {
+    try { unlinkSync(tmp); } catch { /* ignore */ }
+    throw err;
+  }
+}
+
 function handleFinalize(
   req: import("node:http").IncomingMessage,
   res: import("node:http").ServerResponse,
@@ -38,8 +45,8 @@ function handleFinalize(
     res.end("invalid design name");
     return;
   }
-  const indexPath = join(root, "drafts", design, "index.json");
-  if (!indexPath.startsWith(join(root, "drafts") + sep)) {
+  const indexPath = join(root, "designs", design, "index.json");
+  if (!indexPath.startsWith(join(root, "designs") + sep)) {
     res.statusCode = 403;
     res.end("forbidden");
     return;
@@ -52,7 +59,6 @@ function handleFinalize(
   const chunks: Buffer[] = [];
   req.on("data", (c: Buffer) => chunks.push(c));
   req.on("end", () => {
-    const tmp = indexPath + ".tmp";
     try {
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
       const current = JSON.parse(readFileSync(indexPath, "utf8"));
@@ -67,14 +73,66 @@ function handleFinalize(
       } else {
         current.chosen = merged.chosen;
       }
-      writeFileSync(tmp, JSON.stringify(current, null, 2));
-      renameSync(tmp, indexPath);
+      atomicWriteSync(indexPath, JSON.stringify(current, null, 2));
       res.setHeader("content-type", "application/json; charset=utf-8");
       res.end(JSON.stringify({ ok: true, chosen: current.chosen ?? null }));
     } catch (err) {
-      try { unlinkSync(tmp); } catch { /* no partial temp to clean */ }
       res.statusCode = 500;
       res.end(`finalize failed: ${(err as Error).message}`);
+    }
+  });
+}
+
+function handlePromote(
+  req: import("node:http").IncomingMessage,
+  res: import("node:http").ServerResponse,
+  root: string,
+  ds: string,
+): void {
+  if (!isValidDesignName(ds)) {
+    res.statusCode = 400;
+    res.end("invalid ds name");
+    return;
+  }
+  const tokensPath = join(root, "design-systems", ds, "tokens.css");
+  const manifestPath = join(root, "design-systems", ds, "manifest.json");
+  if (!tokensPath.startsWith(join(root, "design-systems") + sep)) {
+    res.statusCode = 403;
+    res.end("forbidden");
+    return;
+  }
+  if (!existsSync(tokensPath)) {
+    res.statusCode = 404;
+    res.end("tokens.css not found");
+    return;
+  }
+  const chunks: Buffer[] = [];
+  req.on("data", (c: Buffer) => chunks.push(c));
+  req.on("end", () => {
+    try {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+      const css = readFileSync(tokensPath, "utf8");
+      const patched = applyPromoteBody(css, body);
+      if (patched.error) {
+        res.statusCode = 400;
+        res.end(patched.error);
+        return;
+      }
+      atomicWriteSync(tokensPath, patched.css!);
+      if (existsSync(manifestPath)) {
+        try {
+          const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+          manifest.updatedAt = new Date().toISOString();
+          atomicWriteSync(manifestPath, JSON.stringify(manifest, null, 2));
+        } catch (err) {
+          console.warn(`Promote: failed to bump manifest: ${(err as Error).message}`);
+        }
+      }
+      res.setHeader("content-type", "application/json; charset=utf-8");
+      res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.statusCode = 500;
+      res.end(`promote failed: ${(err as Error).message}`);
     }
   });
 }
@@ -85,7 +143,6 @@ export function dataServer(dataRoot: string): Plugin {
   return {
     name: "open-designer-data",
     configureServer(server) {
-      // Watch the data folder and broadcast changes over Vite's HMR socket.
       server.watcher.add(root);
       const notify = (absPath: string) => {
         if (!absPath.startsWith(root)) return;
@@ -103,26 +160,61 @@ export function dataServer(dataRoot: string): Plugin {
       server.middlewares.use("/data", (req, res, next) => {
         const url = (req.url || "/").split("?")[0];
 
-        // Finalize endpoint: POST /drafts/<design>/finalize
-        const finalizeMatch = url.match(/^\/drafts\/([^/]+)\/finalize$/);
-        if (finalizeMatch && req.method === "POST") {
-          handleFinalize(req, res, root, decodeURIComponent(finalizeMatch[1]));
+        // POST /designs/<name>/finalize
+        const designFinalize = url.match(/^\/designs\/([^/]+)\/finalize$/);
+        if (designFinalize && req.method === "POST") {
+          handleFinalize(req, res, root, decodeURIComponent(designFinalize[1]));
           return;
         }
 
-        // Synthesize project list from directory structure.
-        if (url === "/drafts/" || url === "/drafts/index.json") {
-          const draftsRoot = join(root, "drafts");
+        // POST /design-systems/<name>/promote
+        const dsPromote = url.match(/^\/design-systems\/([^/]+)\/promote$/);
+        if (dsPromote && req.method === "POST") {
+          handlePromote(req, res, root, decodeURIComponent(dsPromote[1]));
+          return;
+        }
+
+        if (url === "/designs/" || url === "/designs/index.json") {
+          const designsRoot = join(root, "designs");
           res.setHeader("content-type", MIME[".json"]);
           res.setHeader("cache-control", "no-store");
-          if (!existsSync(draftsRoot)) {
-            res.end(JSON.stringify({ projects: [] }));
+          if (!existsSync(designsRoot)) {
+            res.end(JSON.stringify({ designs: [] }));
             return;
           }
-          const projects = readdirSync(draftsRoot, { withFileTypes: true })
+          const names = readdirSync(designsRoot, { withFileTypes: true })
             .filter((e) => e.isDirectory())
             .map((e) => e.name);
-          res.end(JSON.stringify({ projects }));
+          res.end(JSON.stringify({ designs: names }));
+          return;
+        }
+
+        if (url === "/design-systems/" || url === "/design-systems/index.json") {
+          const dsRoot = join(root, "design-systems");
+          res.setHeader("content-type", MIME[".json"]);
+          res.setHeader("cache-control", "no-store");
+          if (!existsSync(dsRoot)) {
+            res.end(JSON.stringify({ designSystems: [] }));
+            return;
+          }
+          const out: Array<{ name: string; description: string | null; extends: string | null; updatedAt: string | null }> = [];
+          for (const e of readdirSync(dsRoot, { withFileTypes: true })) {
+            if (!e.isDirectory()) continue;
+            const manifestPath = join(dsRoot, e.name, "manifest.json");
+            if (!existsSync(manifestPath)) continue;
+            try {
+              const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+              out.push({
+                name: String(manifest.name ?? e.name),
+                description: manifest.description ?? null,
+                extends: manifest.extends ?? null,
+                updatedAt: manifest.updatedAt ?? null,
+              });
+            } catch {
+              console.warn(`Skipping DS ${e.name}: unreadable manifest.`);
+            }
+          }
+          res.end(JSON.stringify({ designSystems: out }));
           return;
         }
 

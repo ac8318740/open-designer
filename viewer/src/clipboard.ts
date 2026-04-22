@@ -1,4 +1,4 @@
-import type { SelectionSnapshot } from "./types";
+import type { SelectionSnapshot, ViewerMode } from "./types";
 
 const OUTER_HTML_LIMIT = 2048;
 
@@ -34,20 +34,46 @@ function formatElement(sel: SelectionSnapshot): string {
   ].join("\n");
 }
 
+export interface PayloadContext {
+  mode: ViewerMode;
+  // In designs mode: the design name. In DS mode: the DS name.
+  name: string;
+  // In designs mode: the page id (optional). In DS mode: the playable page id.
+  pageId?: string;
+  variantId?: string;
+  // In designs mode: the active DS that governs this design (optional).
+  designSystem?: string;
+}
+
+function leadSentence(ctx: PayloadContext, count: number): string {
+  const pageBit = ctx.pageId ? `page \`${ctx.pageId}\`` : "";
+  const variantBit = ctx.variantId ? `variant \`${ctx.variantId}\`` : "";
+  const parts = [pageBit, variantBit].filter(Boolean).join(", ");
+  const locator = parts ? ` (${parts})` : "";
+
+  if (ctx.mode === "design-systems") {
+    const countBit = count === 1 ? "an element" : `${count} elements`;
+    return `I selected ${countBit} in design system \`${ctx.name}\`${locator ? ` – playable ${locator.slice(1)}` : ""}.`;
+  }
+
+  const countBit = count === 1 ? "an element" : `${count} elements`;
+  const dsBit = ctx.designSystem ? ` (design system \`${ctx.designSystem}\`)` : "";
+  return `I selected ${countBit} in design \`${ctx.name}\`${locator}${dsBit}.`;
+}
+
 export function buildPayload(args: {
-  project: string;
-  file: string;
+  ctx: PayloadContext;
   selections: SelectionSnapshot[];
   prompt: string;
   activeTweaks?: Record<string, string>;
 }): string {
-  const { project, file, selections, prompt, activeTweaks } = args;
+  const { ctx, selections, prompt, activeTweaks } = args;
   const trimmedPrompt = prompt.trim() || "(no request – placeholder, please ask me)";
 
   if (selections.length === 1) {
     const sel = selections[0];
     return [
-      `I selected an element in draft \`${file}\` (project \`${project}\`).`,
+      leadSentence(ctx, 1),
       "",
       `Element selector: \`${sel.selector}\``,
       `Bounding box: ${Math.round(sel.rect.width)}x${Math.round(sel.rect.height)} at (${Math.round(sel.rect.x)}, ${Math.round(sel.rect.y)})`,
@@ -69,7 +95,7 @@ export function buildPayload(args: {
     ].join("\n");
   }
 
-  const header = `I selected ${selections.length} elements in draft \`${file}\` (project \`${project}\`).`;
+  const header = leadSentence(ctx, selections.length);
   const blocks = selections.map(formatElement).join("\n\n");
   const tweaksLine =
     activeTweaks && Object.keys(activeTweaks).length

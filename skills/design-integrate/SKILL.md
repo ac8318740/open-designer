@@ -1,15 +1,20 @@
 ---
 name: design-integrate
-description: Port a finalized open-designer variant into the codebase. Use when the user says "integrate the design", "implement the chosen design", "port this into the codebase", "ship the reading-streaks design", or otherwise asks to turn a chosen variant into real components. Triages the work into full pipeline vs quick path, harmonizes softly with spechub if present, and always asks before executing.
+description: Port a finalized open-designer design into the codebase. Use when the user says "integrate the design", "implement the chosen design", "port this into the codebase", "ship the reading-streaks design", or otherwise asks to turn a chosen variant into real components. Integration is two-stage – ship the design system into the codebase first (once per DS), then ship designs against it. Triages per-page, harmonizes softly with spechub if present, and always asks before executing.
 ---
 
 ## What this skill does
 
-Turns a finalized variant from `.open-designer/drafts/<design>/` into real components, routes, and (if needed) backend plumbing in the codebase. The skill is a dynamic dispatcher – it explores first, proposes a path, asks for approval, then executes.
+Turns a finalized design from `.open-designer/designs/<name>/` into real components, routes, and (if needed) backend plumbing in the codebase. Integration has two stages:
+
+- **Stage 1 – ship the DS.** The first time a design system lands in a codebase, port its tokens, voice, rules, assets, and fonts. This happens once per DS; subsequent designs against the same DS skip straight to Stage 2.
+- **Stage 2 – ship the design.** Per-page triage and execution, the same loop as before but now operating against a codebase that already owns the DS's tokens and rules.
+
+The skill is a dynamic dispatcher – it resolves the DS context, explores, proposes a path, asks for approval, then executes.
 
 It harmonizes softly with spechub: if spechub is installed it uses `/spechub:propose`, `/spechub:design`, `/spechub:implement`, or `/spechub:implement-quick`. If spechub is absent it orchestrates the same agent types (`test-writer`, `task-executor`, `task-checker`) directly.
 
-Integration is **one design at a time**. Multi-project batch integration is out of scope.
+Integration is **one design at a time**.
 
 ## When to invoke
 
@@ -18,151 +23,171 @@ The user says any of:
 - "integrate the design"
 - "implement the chosen design"
 - "port this into the codebase"
-- "ship the `<project>` design"
+- "ship the `<design>` design"
 - "take the chosen variant live"
-- "integrate `<project>`"
 
-If the user names a specific design (e.g. "ship reading-streaks"), use that. Otherwise pick the design under `.open-designer/drafts/` with the most recent `chosen.finalizedAt`.
+If the user names a specific design, use that. Otherwise pick the design under `.open-designer/designs/` with the most recent `chosen.finalizedAt`.
 
 ## Hard constraints
 
-- **Never modify `.open-designer/`** during integration, except to add `chosen.shippedAt` at the very end.
-- **Never delete drafts** without explicit user confirmation. The default at the end of the run is to keep them.
-- **Always show the path recommendation before executing.** The user's chance to override is non-negotiable.
-- **Triage must be data-driven.** The recommendation must cite specific files, missing endpoints, or missing tables. No hand-wavy guesses.
-- **Stay scoped to one design.** If the user asks for multi-project integration, stop and ask which one to ship first.
+- **Never modify `.open-designer/designs/<name>/`** during integration, except to add `chosen.shippedAt` at the very end.
+- **Never modify `.open-designer/design-systems/<ds>/`** during integration, except:
+  - `manifest.shippedAt` + `manifest.shippedTo` after Stage 1.
+  - Append-only `briefing/gaps.md` entries when a real gap is discovered during integration.
+- **Never delete drafts** without explicit user confirmation.
+- **Always show the path recommendation before executing.**
+- **Triage must be data-driven.** The recommendation must cite specific files, missing endpoints, or missing tables.
+- **Stay scoped to one design.**
 
 ## Steps
 
-### 1. Read the chosen design
+### Stage 0 – Resolve the DS context
 
-1. Find the target design:
-   - If the user named one, use that.
-   - Otherwise scan `.open-designer/drafts/*/index.json` and pick the one with the most recent `chosen.finalizedAt`.
-2. If no `chosen` exists in any design, stop and say: "Pick a variant in the viewer first (click **Finalize this** in the Tweaks panel), then re-run."
-3. **A design is now a set of pages.** Read `chosen.pages` – each entry maps a page id to `{ variantId, tweaks }`. Iterate over every page present in `chosen.pages`:
-   - Look up the page in the index's `pages` array by id.
+Run on every integration, before any exploration agents fire.
+
+1. Read `designs/<name>/index.json`. Pull `designSystem: <ds-name>` and `chosen.pages`. Legacy designs without a `designSystem` field: ask the user which DS governs this design.
+2. Walk the `extends:` chain from leaf to root in `.open-designer/design-systems/`. Build a single **resolved DS bundle** in memory:
+   - **Resolved `tokens.css`** – concatenate parent → child (child rules win at `:root`).
+   - **Merged `briefing/voice.md`, `briefing/rules.md`, `briefing/gaps.md`** – child overrides parent on rule conflicts; voice/gaps are union with a "from <DS>" tag per entry.
+   - **`briefing/components.md`, `briefing/routes.md`, `briefing/layouts.md`, `briefing/theme.md`** from each level, tagged by DS.
+   - **`pages/*.html`** matched against the design's chosen pages (best-effort filename or intent match) – one match per design page.
+3. Write the bundle to `/tmp/od-resolved-<design>-<ts>/` so subagents read by path, not by paste:
+
+   ```
+   /tmp/od-resolved-<design>-<ts>/
+     tokens.css
+     voice.md    rules.md    gaps.md
+     components.md   routes.md   layouts.md   theme.md
+     pages/<pageId>.html      ← matched playable page, per design page
+     resolved/<pageId>.html   ← the design's chosen variant, tweaks applied
+   ```
+
+4. **Multi-DS detection.** If the DS has a `shippedTo` that points to a codebase folder, and that folder does not match the current integration target, stop and ask via `AskUserQuestion`:
+   - `This is a new surface – ship the DS to a different folder` – default.
+   - `Migrate the codebase to this DS` – only if the user really wants to replace.
+   - `Cancel`.
+
+   The most common case is the first – e.g. marketing DS ships to `marketing/`, app DS to `app/`. Don't assume.
+
+### Stage 1 – Ship the DS (once per DS)
+
+If `manifest.shippedAt` is absent or `shippedTo` is missing, run Stage 1 before any per-design work. Otherwise skip to Stage 2.
+
+Use `AskUserQuestion` to confirm Stage 1 should run. Then run a clarification round specifically for porting the DS:
+
+- **Where does `tokens.css` land?** Suggest a location inferred from the codebase:
+  - Next.js / Tailwind – merge into `globals.css`, or into `src/styles/tokens.css` imported from `globals.css`.
+  - Vite + plain CSS – `src/styles/tokens.css`.
+  - Component library using CSS-in-JS – ask; this may need a Tailwind preset or a theme module.
+- **Font setup.** `gaps.md` lists font substitutions and self-host needs. Confirm the framework's font-loading mechanism (`next/font`, `@font-face` + `woff2`, link tags). Wire accordingly.
+- **Voice + rules destination.** Where should `voice.md` + `rules.md` content live in the project's docs? Suggest `THEME.md`, `docs/design-system.md`, or append to an existing `DESIGN_PRINCIPLES.md`.
+- **Icon library.** If `rules.md` pins an icon library (e.g., Lucide), confirm the dep is installed; if not, offer to add it.
+- **Asset placement.** `assets/` ports to the project's static asset folder (`public/`, `src/assets/`, etc.).
+
+Execute Stage 1 with the full resolved bundle + the clarification answers as input to the executor (same spechub/no-spechub split as Stage 2 below, but tuned: test-writer is typically unnecessary for a DS port – no new behavior, only tokens + docs).
+
+After Stage 1 succeeds:
+
+- Write `manifest.shippedAt = <now ISO>` and `manifest.shippedTo = <absolute path to project>` to the DS's `manifest.json`. These are the only DS writes this skill is allowed to make.
+
+### Stage 2 – Ship the design
+
+Per-page triage and execution. The design's chosen variants + tweaks are the spec; the DS bundle already lives in the codebase after Stage 1.
+
+#### Step 1 – Read the chosen design
+
+1. Find the target design. If the user named one, use that. Otherwise scan `.open-designer/designs/*/index.json` and pick the most recent `chosen.finalizedAt`.
+2. If no `chosen` exists, stop and say: "Pick a variant in the viewer first (click **Finalize this** in the Tweaks panel), then re-run."
+3. Read `chosen.pages` – each entry maps a page id to `{ variantId, tweaks }`. For each page:
+   - Look up the page in `pages` by id.
    - Match `variantId` to the page's `variants[].id` and read that variant's `file`.
-   - Apply the merged tweaks (design-level + page-level + the variant's declared tweaks), overriding with the chosen `tweaks` snapshot. For each tweak, replace the default value at its `target` CSS variable in the HTML's `:root`.
-   - Write each resolved HTML to its own temp file: `/tmp/od-resolved-<design>-<pageId>-<ts>.html`. Never write inside the user's repo.
-4. **Legacy designs** (no `chosen.pages`, only `chosen.variantId`): treat as a single implicit page `main` whose variant is `chosen.variantId`.
-5. Remember: the set of resolved HTMLs is the **visual contract** for the rest of this run – one file per page.
+   - Apply the merged tweaks (design-level + page-level + variant-declared), overriding with the chosen `tweaks` snapshot. For each tweak, replace the default at its `target` CSS variable in the HTML's `:root`.
+   - Write the resolved HTML to `/tmp/od-resolved-<design>-<ts>/resolved/<pageId>.html`.
+4. **Legacy designs** (no `chosen.pages`, only `chosen.variantId`): treat as a single implicit page `main`.
 
-Do **not** merge all pages into a single artifact for the executor. Keep them separate; each page is a distinct integration target.
+#### Step 2 – Quick exploration
 
-### 2. Quick exploration
+Agent 1 (DS context) runs **once** per integration.
 
-Agent 1 (init context) runs **once** – the design system is shared across pages.
+**Agents 2 and 3 run per page.** Launch one Agent 2 + one Agent 3 per page, all in parallel with Agent 1 in a single Agent tool batch.
 
-**Agents 2 and 3 run per page.** Each page can have a different overlap profile and a different backend gap, so they need independent triage. Launch one Agent 2 + one Agent 3 per page, all in parallel with Agent 1 in a single Agent tool batch.
+- **Agent 1 – DS context** (one run). Reads the resolved bundle from `/tmp/od-resolved-<design>-<ts>/`. Reports: tokens by name (not value), voice rules, structural rules, gaps to avoid.
+- **Agent 2 – codebase overlap** (per page). Cross-references DS `briefing/components.md` against actual codebase components. Reports: "design uses a button matching `preview/components.html#primary` → reuse `src/components/ui/button.tsx`."
+- **Agent 3 – backend gap** (per page). Uses DS `briefing/routes.md` to better infer existing endpoints/tables.
 
-- **Agent 1 – init context** (one run): scan `.open-designer/init/*.md` and `.open-designer/design-system.md`. Report: component inventory, theme tokens, route map, layout shells.
-- **Agent 2 – codebase overlap** (per page): search the codebase for existing UI that overlaps with this page's chosen design. Report: components that look similar, routes that might host this page, primitives safe to reuse.
-- **Agent 3 – backend gap** (per page): detect whether this page implies data or actions the codebase doesn't yet have. Report: referenced entities, likely tables/endpoints, whether they already exist.
+See `EXPLORE.md` for prompt text.
 
-See `EXPLORE.md` for the exact prompts and how to template the per-page ones.
+#### Step 3 – Triage per page
 
-### 3. Triage and pick a path, per page
+Score each page independently along the three axes. See `PATHS.md`.
 
-Score each page independently along the three axes. See `PATHS.md` for the full matrix.
-
-- **Backend gap** – high if this page needs new tables, server actions, or API endpoints Agent 3 couldn't find.
-- **Component novelty** – high if Agent 2 found no meaningful overlap with existing components for this page.
+- **Backend gap** – high if this page needs new tables / actions / endpoints Agent 3 couldn't find.
+- **Component novelty** – high if Agent 2 found no meaningful overlap.
 - **Cross-cutting impact** – high if this page touches routing, auth, layout shells, or shared state.
 
-Map each page to one of:
+Map each page to **full pipeline** or **quick path**. Paths are heterogeneous across pages – don't force one path on the whole design.
 
-| Signal | Path |
-|---|---|
-| Any axis is high | **Full pipeline** – proposal, design, tasks, implementation |
-| All axes low, scoped to one route/component, or pure visual update | **Quick path** – skip proposal/design |
+#### Step 4 – Spechub awareness check
 
-**Paths are heterogeneous across pages.** A list page may qualify for the quick path while the detail page needs full pipeline because it introduces a new table. Don't force one path on the whole design.
+Look for `spechub/project.yaml`, the `/spechub:*` slash commands, or the plugin cache. If found → soft integration mode. See `SPECHUB-MAP.md`.
 
-In the proposal (step 5), recommend one path per page and cite the evidence for each.
+#### Step 5 – Propose to the user
 
-### 4. Spechub awareness check
+Use `AskUserQuestion` with one paragraph per page, citing concrete evidence (files, missing endpoints, missing tables). Close with the decision options.
 
-Look for any of:
+If the user picks "show findings", dump the Explore summaries (one per page for Agent 2/3, plus the single Agent 1), then re-ask.
 
-- `spechub/project.yaml` in the working directory tree
-- A marker that the spechub plugin is installed (e.g. `~/.claude/plugins/cache/.../spechub/`)
-- The slash commands `/spechub:propose`, `/spechub:implement-quick` being available
+#### Step 6 – Clarification round
 
-If found → **soft integration mode**: use spechub commands. See `SPECHUB-MAP.md` for which command to call when, with ready-to-use prompts.
-
-If absent → **self-contained mode**: orchestrate `test-writer`, `task-executor`, `task-checker` directly from this skill.
-
-### 5. Propose to the user
-
-Use `AskUserQuestion` with:
-
-- **Header**: "Integration plan"
-- **Question**: one paragraph per page with the recommended path and cited evidence (specific files, missing endpoints, missing tables). Close with the top-level decision options.
-
-Example (multi-page design):
-
-```
-Recommended paths per page:
-
-• log – quick path. No backend gap (reads from existing `meetings` table
-  in src/db/schema.ts). Component overlap is high (reuse ListRow,
-  DayHeading from src/components/list/).
-
-• detail – full pipeline. High backend gap – the note body needs a new
-  `meeting_notes` table and a `saveMeetingNote` server action, neither
-  of which exists under src/db or src/app/actions.
-
-Spechub detected; will run /spechub:implement-quick for log, then
-/spechub:propose → /spechub:design → /spechub:implement for detail.
-
-1. Proceed with the per-page plan (recommended)
-2. Use the same path for both pages – which one?
-3. Show me the exploration findings first
-```
-
-Honor whatever the user picks. If they pick "show findings", dump the Explore summaries (one per page for Agent 2/3, plus the single Agent 1), then re-ask.
-
-### 6. Clarification round
-
-Always run a clarification round before executing. Batch related questions into a single `AskUserQuestion` call. **Ask one cluster of questions per page**, since routing/data/mapping decisions are page-specific.
+Always run clarification before executing. Batch related questions into a single `AskUserQuestion` call. Ask one cluster per page.
 
 Typical per-page questions:
 
-- **Route**: which route should this page land at? (Offer the top-scoring candidates from Agent 2.) For a brand-new page, propose a path and confirm.
-- **New vs existing**: should this become a new component, or extend existing `<X />`?
-- **Token mapping**: the draft uses Tailwind class `text-amber-600` – should this map to the existing `--accent` token or a new one?
-- **Copy**: the draft contains lorem-ipsum text in the product card – is that a placeholder, or should it read from the `products` table?
-- **Data**: is the streak count real data from the new table, or a hard-coded number for the first cut?
-- **Navigation mapping**: for each `data-od-link="<pageId>"` in this page's draft, what's the corresponding real-app navigation? (E.g. Next.js `<Link href="/notes/[id]">`, React Router `<Link to="/notes/...">`, or a router action.) List the `data-od-link`s present in the draft and confirm the target route for each.
-- **Scrollbar**: should the viewer's default thin/overlay scrollbar behavior ship in the real app? The viewer injects `scrollbar-gutter: stable`, `scrollbar-width: thin`, and `::-webkit-scrollbar` thumb styling. If the user wants that in production, port it into the app's global stylesheet (e.g. Tailwind `@layer base` in `globals.css`) or reach for `OverlayScrollbars` for fully cross-browser overlay behavior including Firefox. (Ask once per design, not per page.)
+- **Route**: which route should this page land at?
+- **New vs existing**: new component or extend existing `<X />`?
+- **Token mapping**: the draft uses `--<prefix>-amber-500` – confirm this maps to the codebase's current token after Stage 1.
+- **Copy**: lorem-ipsum placeholder or real data?
+- **Data**: real data from a new table, or hard-coded for first cut?
+- **Navigation mapping**: for each `data-od-page="<pageId>"` in this page's draft, what's the real-app equivalent? (Next.js `<Link>`, React Router `<Link>`, router action.) List them and confirm.
+- **Scrollbar** (ask once per design, not per page): should the viewer's thin/overlay scrollbar ship in the real app?
 
-### 7. Execute
+#### Step 7 – Execute per page
 
-See `SPECHUB-MAP.md` for the exact command/prompt for each combination.
+See `SPECHUB-MAP.md`. Execute page by page, in the order the user confirmed.
 
-Execute **page by page**, in the order the user confirmed. Pages with a full-pipeline path go first if any later page's implementation will want to link to them.
+For each page, feed the executor:
 
-- **Full pipeline + spechub**: hand off to `/spechub:propose` with a synthesized request that bundles the page's resolved HTML reference, the init files, the chosen tweaks, and the clarification answers for that page. Stay in the loop to feed context to `/spechub:design` and `/spechub:implement`.
-- **Quick path + spechub**: invoke `/spechub:implement-quick` directly with the same bundled context.
-- **Full pipeline + no spechub**: orchestrate `test-writer` → `task-executor` → `task-checker` subagents.
-- **Quick path + no spechub**: skip test-writing for the visual portion. Use `task-executor` + `task-checker`. Frontend-verifier if available.
+- **Resolved DS bundle path** – `/tmp/od-resolved-<design>-<ts>/`.
+- **Resolved page HTML path** – `resolved/<pageId>.html`.
+- **Matched DS playable page path** – `pages/<pageId>.html` (so the executor can see how the DS expresses the layout language).
+- **Clarification answers for this page** – route, copy, data, navigation mapping.
 
-For each page, feed the **resolved HTML path for that page** + init files + chosen tweaks for that page + the clarification answers (including the `data-od-link` → real-route mapping) into the executor. Do NOT paste the whole HTML into the prompt – point to the path.
+**Executor authoring rules** (mirror the `/design` rules so ported code stays honest):
 
-When a page's executor is writing navigation elements, translate each `data-od-link="<pageId>"` in the draft into the framework's navigation primitive using the mapping confirmed in step 6. Drop the `data-od-link` attribute from the shipped code.
+- Use the project's tokens by name, never reintroduce hex literals.
+- Apply `voice.md` to every string – use `rules.md` as a checklist before any heading / button / error label.
+- Reuse components Agent 2 identified before creating new ones.
+- Honour structural rules from `rules.md` (cards brighter than canvas, 1px borders always visible, etc.).
+- Drop `data-od-page` attributes from shipped code; replace with the framework's nav primitive per the clarification answers.
 
-### 8. Verify visually
+Do NOT paste the whole HTML into the prompt. Point to paths.
 
-For each page that shipped to a route, if the project is a frontend app and a dev server can be started, kick off `agent-browser` (per `spechub:browser-verify` if available, else call it directly). Navigate to each integrated route and snapshot. Compare visually against the page's resolved HTML – same layout, same colors, same copy structure.
+#### Step 8 – Verify (extended)
 
-Also verify the in-draft navigation mapped correctly: click the element that was `data-od-link="<otherPage>"` and confirm it routes to the real page's route.
+`agent-browser` snapshot per route **plus a rules-lint pass**:
 
-If the dev server can't start or the project is not frontend, report that and skip.
+- Compare each shipped surface against `rules.md`. Flag obvious violations (gradient where rules forbid; emoji in chrome where banned; second accent hue where rule says one).
+- Report any `voice.md` violations in shipped strings (Title Case where sentence case is required, etc.).
 
-### 9. Mark shipped
+These are warnings, not failures – the user decides whether to fix.
 
-Update the design's `index.json` once all pages are shipped:
+#### Step 9 – Feedback loop into the DS
+
+If integration discovered a real gap, **append-only** write a `briefing/gaps.md` entry on the DS. Example: "no `--<prefix>-tag-bg` token – ad-hoc value used in `src/components/tag.tsx`; consider promoting." Do not rewrite `gaps.md`; only append. This is the only DS write Stage 2 is allowed to make.
+
+#### Step 10 – Mark shipped
+
+Update the design's `index.json`:
 
 ```json
 "chosen": {
@@ -175,21 +200,23 @@ Update the design's `index.json` once all pages are shipped:
 }
 ```
 
-This is the ONLY write to `.open-designer/` the skill is allowed to make. POST the whole `chosen` object (with `shippedAt` added) to the finalize endpoint so the write is atomic.
+This is the ONLY write to `designs/<name>/` this skill is allowed to make. POST the whole `chosen` object (with `shippedAt` added) to the finalize endpoint so the write is atomic.
 
 Do NOT delete drafts.
 
-### 10. Report
+#### Step 11 – Report
 
 End with a short report:
 
-- **Pages shipped**: each page, its target route, and whether it took the full or quick path.
-- **Files modified**: list the files in the codebase, not the design folder.
-- **Verification**: screenshot path per page if produced, else explain why skipped.
-- **Cleanup offer**: one-liner like "Want me to delete the other variants now? They're at `.open-designer/drafts/<project>/`. Default: keep them."
+- **DS shipped** (if Stage 1 ran): where tokens.css landed, font setup, doc location.
+- **Pages shipped**: each page, its target route, full or quick path.
+- **Files modified**: in the codebase, not the design folder.
+- **Verification**: screenshots if produced, rules-lint warnings if any.
+- **Gaps appended** (if any): the specific `gaps.md` entries you added.
+- **Cleanup offer**: "Want me to delete the other variants now? They're at `.open-designer/designs/<name>/`. Default: keep them."
 
 ## Companion files
 
-- `EXPLORE.md` – the three exploration agent prompts.
+- `EXPLORE.md` – the three exploration agent prompts (updated for DS bundle).
 - `PATHS.md` – the triage matrix with examples of each path.
-- `SPECHUB-MAP.md` – spechub-vs-self-contained command mapping with ready-to-use prompts.
+- `SPECHUB-MAP.md` – spechub-vs-self-contained command mapping.

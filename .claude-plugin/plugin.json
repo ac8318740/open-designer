@@ -1,7 +1,7 @@
 {
   "name": "open-designer",
-  "description": "Local design loop – Claude writes HTML drafts, you click elements in a viewer to iterate.",
-  "version": "0.3.0",
+  "description": "Local design loop – Claude writes HTML designs against a first-class design system, you click elements in a viewer to iterate.",
+  "version": "0.4.0",
   "author": {
     "name": "ac8318740"
   },
@@ -9,6 +9,7 @@
   "license": "MIT",
   "keywords": [
     "design",
+    "design-system",
     "ui",
     "html",
     "viewer",

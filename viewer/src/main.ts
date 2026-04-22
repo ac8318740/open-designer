@@ -1,4 +1,4 @@
-import { buildPayload } from "./clipboard";
+import { buildPayload, type PayloadContext } from "./clipboard";
 import { mountComposer } from "./composer";
 import { MAX_SELECTIONS, Picker } from "./picker";
 import {
@@ -13,35 +13,44 @@ import {
 import type {
   Chosen,
   ChosenPage,
-  DraftEntry,
-  DraftIndex,
+  DesignEntry,
+  DesignIndex,
+  DesignSystemEntry,
+  DesignSystemIndexPages,
+  DesignSystemManifest,
   LegacyChosen,
   NormalizedIndex,
   Page,
-  ProjectEntry,
   Tweak,
+  VariantEntry,
+  ViewerMode,
 } from "./types";
 
 const DATA_ROOT = "/data";
 const ACTIVE_DESIGN_KEY = "od:active-design";
+const ACTIVE_DS_KEY = "od:active-ds";
+const ACTIVE_MODE_KEY = "od:mode";
 const TWEAKS_CORNER_KEY = "od:tweaks-corner";
 type Corner = "br" | "bl" | "tr" | "tl";
 const CORNERS: Corner[] = ["br", "bl", "tr", "tl"];
 
-// Normalized project representation. All render code reads from this; the
-// raw DraftIndex (with its union-typed `chosen`) never leaks past
-// `normalizeIndex`. `pages` and `chosen` are mirrored at the top level for
-// ergonomic access.
-interface NormalizedProject {
-  project: string;
+interface NormalizedDesign {
+  name: string;
+  designSystem?: string;
   index: NormalizedIndex;
   pages: Page[];
   chosen?: Chosen;
 }
 
-function getChosenForPage(proj: NormalizedProject | null, pageId: string | null | undefined): ChosenPage | undefined {
-  if (!proj || !pageId) return undefined;
-  return proj.chosen?.pages?.[pageId];
+interface NormalizedDS {
+  name: string;
+  manifest: DesignSystemManifest;
+  pages: Page[];
+}
+
+function getChosenForPage(design: NormalizedDesign | null, pageId: string | null | undefined): ChosenPage | undefined {
+  if (!design || !pageId) return undefined;
+  return design.chosen?.pages?.[pageId];
 }
 
 function clearPageHistory(): void {
@@ -49,9 +58,6 @@ function clearPageHistory(): void {
   renderBackButton();
 }
 
-// Pick the first matching item from a list, tried in the order of candidate
-// ids; falls back to items[0]. Used for resolving "which page/variant" with
-// a graceful-degradation chain (e.g. prev id → stored id → first).
 function resolveById<T extends { id: string }>(
   items: T[],
   ...candidates: Array<string | null | undefined>
@@ -67,15 +73,15 @@ function resolveById<T extends { id: string }>(
 // State ---------------------------------------------------------------------
 
 const picker = new Picker();
-let projects: NormalizedProject[] = [];
-let activeProject: NormalizedProject | null = null;
+let mode: ViewerMode = "designs";
+let designs: NormalizedDesign[] = [];
+let designSystems: NormalizedDS[] = [];
+let activeDesign: NormalizedDesign | null = null;
+let activeDS: NormalizedDS | null = null;
 let activePage: Page | null = null;
-let activeVariant: DraftEntry | null = null;
+let activeVariant: VariantEntry | null = null;
 let tweakValues: Record<string, string> = {};
 const pageHistory: Array<{ pageId: string; variantId: string }> = [];
-// Flow navigations (in-draft link clicks, Back button) pass fade: true.
-// Everything else – dropdowns, initial load, HMR reload, variant swaps –
-// omits it and the iframe swaps without fading.
 interface NavOpts { fade?: boolean }
 
 // DOM refs ------------------------------------------------------------------
@@ -83,8 +89,12 @@ interface NavOpts { fade?: boolean }
 const iframe = document.getElementById("draft-frame") as HTMLIFrameElement;
 const stage = document.getElementById("stage")!;
 const emptyState = document.getElementById("empty-state")!;
+const emptyStateDs = document.getElementById("empty-state-ds")!;
 const projectLabel = document.getElementById("project-label")!;
 const designSelect = document.getElementById("design-select") as HTMLSelectElement;
+const dsSelect = document.getElementById("ds-select") as HTMLSelectElement;
+const modeDesigns = document.getElementById("mode-designs") as HTMLButtonElement;
+const modeDesignSystems = document.getElementById("mode-design-systems") as HTMLButtonElement;
 const pageSelect = document.getElementById("page-select") as HTMLSelectElement;
 const backBtn = document.getElementById("back-btn") as HTMLButtonElement;
 const pickerToggle = document.getElementById("picker-toggle") as HTMLButtonElement;
@@ -128,11 +138,14 @@ tweaksClose.addEventListener("click", () => toggleTweaksPanel(false));
 refreshBtn.addEventListener("click", () => refresh());
 fullscreenBtn.addEventListener("click", () => enterFullscreen());
 designSelect.addEventListener("change", () => selectDesign(designSelect.value));
+dsSelect.addEventListener("change", () => selectDS(dsSelect.value));
+modeDesigns.addEventListener("click", () => setMode("designs"));
+modeDesignSystems.addEventListener("click", () => setMode("design-systems"));
 pageSelect.addEventListener("change", () => {
-  if (!activeProject) return;
-  const next = activeProject.pages.find((p) => p.id === pageSelect.value);
+  const current = activeContext();
+  if (!current) return;
+  const next = current.pages.find((p) => p.id === pageSelect.value);
   if (!next) return;
-  // Explicit dropdown navigation is not a flow – clear history.
   clearPageHistory();
   selectPage(next);
 });
@@ -145,7 +158,6 @@ function handleHotkey(e: KeyboardEvent): void {
     togglePicker();
     return;
   }
-  // Shift+Comma produces "<" on US layouts, so match e.code.
   if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.code === "Comma") {
     e.preventDefault();
     e.stopPropagation();
@@ -171,6 +183,9 @@ function exitFullscreen(): void {
 document.addEventListener("keydown", handleHotkey);
 window.addEventListener("message", handleFrameMessage);
 
+mode = loadMode();
+applyModeToDom();
+
 const panelStartsOpen = isPanelOpen();
 tweaksPanel.hidden = !panelStartsOpen;
 tweaksToggle.setAttribute("aria-checked", String(panelStartsOpen));
@@ -187,26 +202,39 @@ refresh().catch((err) => {
 if (import.meta.hot) {
   import.meta.hot.on("open-designer:data-changed", (payload: { path: string }) => {
     const path = payload.path;
-    if (path.endsWith("/index.json")) {
+    if (path.endsWith("/index.json") || path.endsWith("/manifest.json") || path.endsWith("/tokens.css")) {
       refresh();
       return;
     }
-    if (!activeProject || !activeVariant) return;
-    // Variant.file carries the page subfolder today (e.g. "log/01-default.html"),
-    // so this URL builder works. If a future schema ever stores file names
-    // without the page prefix, update this to join page.id + variant.file.
-    const activeUrl = `/drafts/${activeProject.project}/${activeVariant.file}`;
-    if (path === activeUrl) {
+    if (!activeVariant) return;
+    const url = activeVariantUrl();
+    if (url && path === url) {
       reloadActiveVariant();
     }
   });
 }
 
+// Active context helpers ----------------------------------------------------
+
+function activeContext(): { pages: Page[] } | null {
+  if (mode === "designs") return activeDesign;
+  return activeDS;
+}
+
+function activeVariantUrl(): string | null {
+  if (!activeVariant) return null;
+  if (mode === "designs" && activeDesign) {
+    return `/designs/${activeDesign.name}/${activeVariant.file}`;
+  }
+  if (mode === "design-systems" && activeDS) {
+    return `/design-systems/${activeDS.name}/pages/${activeVariant.file}`;
+  }
+  return null;
+}
+
 // Normalize -----------------------------------------------------------------
 
-// Convert a raw index.json into the new pages-based shape. Legacy designs
-// with a flat `drafts: []` become a single implicit page ("main").
-function normalizeIndex(raw: DraftIndex): { index: NormalizedIndex; pages: Page[]; chosen?: Chosen } {
+function normalizeIndex(raw: DesignIndex): { index: NormalizedIndex; pages: Page[]; chosen?: Chosen } {
   let pages: Page[];
   if (Array.isArray(raw.pages) && raw.pages.length > 0) {
     pages = raw.pages;
@@ -221,7 +249,6 @@ function normalizeIndex(raw: DraftIndex): { index: NormalizedIndex; pages: Page[
     if ("pages" in raw.chosen && raw.chosen.pages) {
       chosen = raw.chosen as Chosen;
     } else if (pages.length > 0) {
-      // Legacy single-variant chosen – fold into first page.
       const legacy = raw.chosen as LegacyChosen;
       chosen = {
         finalizedAt: legacy.finalizedAt,
@@ -236,8 +263,6 @@ function normalizeIndex(raw: DraftIndex): { index: NormalizedIndex; pages: Page[
     }
   }
 
-  // Drop chosen entries whose page was deleted, or whose variantId is no
-  // longer on the page. Prevents dangling ★ markers and silent fallbacks.
   if (chosen) {
     const livePageIds = new Set(pages.map((p) => p.id));
     const filtered: Record<string, ChosenPage> = {};
@@ -252,9 +277,6 @@ function normalizeIndex(raw: DraftIndex): { index: NormalizedIndex; pages: Page[
       : undefined;
   }
 
-  // Build the narrowed index: drop the legacy `drafts` field and replace the
-  // union-typed `chosen` with the filtered new-shape one. After this, no
-  // render code needs to discriminate between legacy and new shapes.
   const { drafts: _drafts, chosen: _chosen, ...rest } = raw;
   const index: NormalizedIndex = { ...rest, pages };
   if (chosen) index.chosen = chosen;
@@ -262,55 +284,205 @@ function normalizeIndex(raw: DraftIndex): { index: NormalizedIndex; pages: Page[
   return { index, pages, chosen };
 }
 
-// Actions -------------------------------------------------------------------
+function normalizeDSPages(raw: DesignSystemIndexPages): Page[] {
+  if (Array.isArray(raw.pages) && raw.pages.length > 0) return raw.pages;
+  return [];
+}
+
+// Mode management ----------------------------------------------------------
+
+function setMode(next: ViewerMode): void {
+  if (mode === next) return;
+  mode = next;
+  saveMode(next);
+  applyModeToDom();
+  clearPageHistory();
+  picker.clearAll();
+  // Refresh picks up the active design/DS for the new mode.
+  refresh().catch((err) => {
+    console.error(err);
+    showEmpty();
+  });
+}
+
+function applyModeToDom(): void {
+  modeDesigns.setAttribute("aria-selected", String(mode === "designs"));
+  modeDesignSystems.setAttribute("aria-selected", String(mode === "design-systems"));
+  document.body.classList.toggle("mode-designs", mode === "designs");
+  document.body.classList.toggle("mode-design-systems", mode === "design-systems");
+}
+
+function loadMode(): ViewerMode {
+  try {
+    const raw = localStorage.getItem(ACTIVE_MODE_KEY);
+    if (raw === "designs" || raw === "design-systems") return raw;
+  } catch {
+    /* ignore */
+  }
+  return "designs";
+}
+
+function saveMode(m: ViewerMode): void {
+  try {
+    localStorage.setItem(ACTIVE_MODE_KEY, m);
+  } catch {
+    /* ignore */
+  }
+}
+
+// Data loading --------------------------------------------------------------
+
+async function loadDesigns(): Promise<DesignEntry[]> {
+  const out: DesignEntry[] = [];
+  try {
+    const r = await fetch(`${DATA_ROOT}/designs/index.json`);
+    if (r.ok) {
+      const j = (await r.json()) as { designs?: string[]; projects?: string[] };
+      const names = j.designs ?? j.projects ?? [];
+      for (const name of names) {
+        const ir = await fetch(`${DATA_ROOT}/designs/${name}/index.json`);
+        if (ir.ok) out.push({ design: name, index: (await ir.json()) as DesignIndex });
+      }
+    }
+  } catch (err) {
+    console.warn("Failed to load designs:", err);
+  }
+  return out;
+}
+
+async function loadDesignSystems(): Promise<NormalizedDS[]> {
+  const out: NormalizedDS[] = [];
+  try {
+    const r = await fetch(`${DATA_ROOT}/design-systems/index.json`);
+    if (r.ok) {
+      const j = (await r.json()) as { designSystems?: Array<{ name: string }> };
+      const list = j.designSystems ?? [];
+      for (const entry of list) {
+        const name = entry.name;
+        const [manifestRes, pagesRes] = await Promise.all([
+          fetch(`${DATA_ROOT}/design-systems/${name}/manifest.json`),
+          fetch(`${DATA_ROOT}/design-systems/${name}/pages/index.json`),
+        ]);
+        if (!manifestRes.ok) continue;
+        const manifest = (await manifestRes.json()) as DesignSystemManifest;
+        let pages: Page[] = [];
+        if (pagesRes.ok) {
+          const pj = (await pagesRes.json()) as DesignSystemIndexPages;
+          pages = normalizeDSPages(pj);
+        }
+        out.push({ name, manifest, pages });
+      }
+    }
+  } catch (err) {
+    console.warn("Failed to load design systems:", err);
+  }
+  return out;
+}
+
+function resolveExtendsChain(dsName: string | undefined): NormalizedDS[] {
+  // Walk extends: from child back to root; return parent→child order.
+  const chain: NormalizedDS[] = [];
+  const seen = new Set<string>();
+  let cur = dsName ? designSystems.find((d) => d.name === dsName) : undefined;
+  while (cur && !seen.has(cur.name)) {
+    seen.add(cur.name);
+    chain.unshift(cur);
+    const parentName = cur.manifest.extends;
+    if (!parentName) break;
+    cur = designSystems.find((d) => d.name === parentName);
+  }
+  return chain;
+}
+
+// Refresh + selection --------------------------------------------------------
 
 async function refresh(): Promise<void> {
-  const prevProjectName = activeProject?.project;
+  const prevDesignName = activeDesign?.name;
+  const prevDSName = activeDS?.name;
   const prevPageId = activePage?.id;
   const prevVariantId = activeVariant?.id;
 
-  const raw = await loadProjects();
-  projects = raw.map((r) => {
+  // Load both collections – the header dropdowns are always populated, even
+  // when the active mode is the other one.
+  const [rawDesigns, loadedDS] = await Promise.all([
+    loadDesigns(),
+    loadDesignSystems(),
+  ]);
+
+  designs = rawDesigns.map((r) => {
     const norm = normalizeIndex(r.index);
-    return { project: r.project, index: norm.index, pages: norm.pages, chosen: norm.chosen };
+    return {
+      name: r.design,
+      designSystem: r.index.designSystem,
+      index: norm.index,
+      pages: norm.pages,
+      chosen: norm.chosen,
+    };
   });
+  designSystems = loadedDS;
 
-  if (projects.length === 0) {
-    showEmpty();
-    return;
-  }
-  emptyState.hidden = true;
-  iframe.hidden = false;
-
-  const storedDesign = loadActiveDesign();
-  const proj =
-    projects.find((p) => p.project === prevProjectName) ??
-    projects.find((p) => p.project === storedDesign) ??
-    projects[0];
-  activeProject = proj;
-  document.body.classList.toggle("no-multi-design", projects.length < 2);
   populateDesignSelect();
+  populateDsSelect();
 
-  if (proj.pages.length === 0) {
-    showEmpty();
-    return;
+  if (mode === "designs") {
+    if (designs.length === 0) {
+      showEmpty();
+      return;
+    }
+    emptyState.hidden = true;
+    emptyStateDs.hidden = true;
+    iframe.hidden = false;
+
+    const storedName = loadActiveDesign();
+    const d =
+      designs.find((p) => p.name === prevDesignName) ??
+      designs.find((p) => p.name === storedName) ??
+      designs[0];
+    activeDesign = d;
+    activeDS = null;
+    if (d.pages.length === 0) {
+      showEmpty();
+      return;
+    }
+    const page = resolveById(d.pages, prevPageId, loadActivePage(d.name));
+    if (!page) {
+      showEmpty();
+      return;
+    }
+    selectPage(page, { variantId: prevVariantId });
+  } else {
+    if (designSystems.length === 0) {
+      showEmpty();
+      return;
+    }
+    emptyState.hidden = true;
+    emptyStateDs.hidden = true;
+    iframe.hidden = false;
+
+    const storedName = loadActiveDS();
+    const ds =
+      designSystems.find((p) => p.name === prevDSName) ??
+      designSystems.find((p) => p.name === storedName) ??
+      designSystems[0];
+    activeDS = ds;
+    activeDesign = null;
+    if (ds.pages.length === 0) {
+      showEmpty();
+      return;
+    }
+    const page = resolveById(ds.pages, prevPageId, loadActivePage(`ds:${ds.name}`));
+    if (!page) {
+      showEmpty();
+      return;
+    }
+    selectPage(page, { variantId: prevVariantId });
   }
-
-  // Pick active page: previous if still present, else stored, else first.
-  const page = resolveById(proj.pages, prevPageId, loadActivePage(proj.project));
-  if (!page) {
-    showEmpty();
-    return;
-  }
-
-  // Keep the requested variant if it still exists on the target page.
-  selectPage(page, { variantId: prevVariantId });
 }
 
 function selectDesign(name: string): void {
-  const next = projects.find((p) => p.project === name);
+  const next = designs.find((p) => p.name === name);
   if (!next) return;
-  activeProject = next;
+  activeDesign = next;
   saveActiveDesign(name);
   populateDesignSelect();
   clearPageHistory();
@@ -318,7 +490,7 @@ function selectDesign(name: string): void {
     showEmpty();
     return;
   }
-  const page = resolveById(next.pages, loadActivePage(next.project));
+  const page = resolveById(next.pages, loadActivePage(next.name));
   if (!page) {
     showEmpty();
     return;
@@ -326,19 +498,52 @@ function selectDesign(name: string): void {
   selectPage(page);
 }
 
+function selectDS(name: string): void {
+  const next = designSystems.find((d) => d.name === name);
+  if (!next) return;
+  if (mode === "design-systems") {
+    activeDS = next;
+    saveActiveDS(name);
+    populateDsSelect();
+    clearPageHistory();
+    if (next.pages.length === 0) {
+      showEmpty();
+      return;
+    }
+    const page = resolveById(next.pages, loadActivePage(`ds:${next.name}`));
+    if (!page) {
+      showEmpty();
+      return;
+    }
+    selectPage(page);
+    return;
+  }
+  // In Designs mode, picking a DS assigns it to the active design for this
+  // session so the iframe gets the new token chain. It does not rewrite the
+  // design's index.json – that's a skill-side change.
+  if (activeDesign) {
+    activeDesign.designSystem = name;
+    saveActiveDS(name);
+    populateDsSelect();
+    if (activeVariant) reloadActiveVariant();
+  }
+}
+
 function selectPage(
   page: Page,
   opts: NavOpts & { variantId?: string | null } = {},
 ): void {
-  if (!activeProject) return;
+  const ctx = mode === "designs" ? activeDesign : activeDS;
+  if (!ctx) return;
   activePage = page;
-  saveActivePage(activeProject.project, page.id);
+  const storageKey = mode === "designs" ? ctx.name : `ds:${ctx.name}`;
+  saveActivePage(storageKey, page.id);
   populatePageSelect();
 
   const variant = resolveById(
     page.variants,
     opts.variantId,
-    loadActiveVariant(activeProject.project, page.id),
+    loadActiveVariant(storageKey, page.id),
   );
   if (!variant) {
     showEmpty();
@@ -347,28 +552,40 @@ function selectPage(
   selectVariant(variant, { fade: opts.fade });
 }
 
-function selectVariant(variant: DraftEntry, opts: NavOpts = {}): void {
-  if (!activeProject || !activePage) return;
+function selectVariant(variant: VariantEntry, opts: NavOpts = {}): void {
+  if (!activePage) return;
+  const ctx = mode === "designs" ? activeDesign : activeDS;
+  if (!ctx) return;
   activeVariant = variant;
-  saveActiveVariant(activeProject.project, activePage.id, variant.id);
+  const storageKey = mode === "designs" ? ctx.name : `ds:${ctx.name}`;
+  saveActiveVariant(storageKey, activePage.id, variant.id);
   document.body.classList.remove("no-drafts");
 
-  const tweaks = collectTweaks(activeProject.index, activePage, variant);
-  const stored = loadStoredValues(activeProject.project, activePage.id, variant.id);
+  const tweaks = collectTweaks(activeDesign?.index, activePage, variant);
+  const stored = loadStoredValues(storageKey, activePage.id, variant.id);
   tweakValues = buildInitialValues(tweaks, stored);
 
-  projectLabel.textContent = `${activeProject.project} · ${activePage.label ?? activePage.id} · ${variant.label ?? variant.id}`;
+  const ctxName = ctx.name;
+  const pageLabel = activePage.label ?? activePage.id;
+  const variantLabel = variant.label ?? variant.id;
+  const dsBit = mode === "designs" && activeDesign?.designSystem
+    ? ` · ${activeDesign.designSystem}`
+    : "";
+  projectLabel.textContent = `${ctxName} · ${pageLabel} · ${variantLabel}${dsBit}`;
 
   const doFade = opts.fade ?? false;
-  if (doFade) {
-    iframe.classList.add("fading");
-  }
+  if (doFade) iframe.classList.add("fading");
 
-  iframe.src = `${DATA_ROOT}/drafts/${activeProject.project}/${variant.file}`;
+  if (mode === "designs" && activeDesign) {
+    iframe.src = `${DATA_ROOT}/designs/${activeDesign.name}/${variant.file}`;
+  } else if (mode === "design-systems" && activeDS) {
+    iframe.src = `${DATA_ROOT}/design-systems/${activeDS.name}/pages/${variant.file}`;
+  }
   picker.clearAll();
 
   iframe.onload = () => {
     normalizeIframeLayout(iframe);
+    injectTokensChain(iframe);
     injectNavScript(iframe);
     picker.attach(iframe);
     if (picker.isEnabled()) {
@@ -378,7 +595,6 @@ function selectVariant(variant: DraftEntry, opts: NavOpts = {}): void {
     applyTweaksToIframe(iframe, tweaks, tweakValues);
     syncIframeBackground(iframe);
     renderPanel();
-    // Next paint: fade back in.
     if (doFade) {
       requestAnimationFrame(() => iframe.classList.remove("fading"));
     }
@@ -390,17 +606,14 @@ function reloadActiveVariant(): void {
   selectVariant(activeVariant);
 }
 
-function collectTweaks(index: NormalizedIndex, page: Page, variant: DraftEntry): Tweak[] {
+function collectTweaks(index: NormalizedIndex | undefined, page: Page, variant: VariantEntry): Tweak[] {
   return [
-    ...(index.tweaks ?? []),
+    ...(index?.tweaks ?? []),
     ...(page.tweaks ?? []),
     ...(variant.tweaks ?? []),
   ];
 }
 
-// Ensure draft html + body fill the iframe viewport. Without this, any draft
-// whose content is shorter than the stage shows the iframe's white background
-// in the leftover space, which reads as a layout bug on dark drafts.
 function normalizeIframeLayout(frame: HTMLIFrameElement): void {
   const doc = frame.contentDocument;
   if (!doc) return;
@@ -412,9 +625,6 @@ function normalizeIframeLayout(frame: HTMLIFrameElement): void {
   }
   style.textContent = "html, body { min-height: 100vh; }";
 
-  // Default scrollbar look: thin, semi-transparent, no layout shift when the
-  // bar appears. Prepended so drafts can override by declaring their own
-  // rules later in <head>.
   if (!doc.getElementById("od-viewer-scrollbar-defaults")) {
     const sb = doc.createElement("style");
     sb.id = "od-viewer-scrollbar-defaults";
@@ -423,10 +633,32 @@ function normalizeIframeLayout(frame: HTMLIFrameElement): void {
   }
 }
 
-// Match the iframe element's background to the draft's own background so the
-// reserved scrollbar-gutter column (and any area outside body) blends in
-// instead of showing the iframe's fallback white. Called after every tweak
-// application since tweaks can change the resolved bg color.
+// In designs mode, inject the resolved extends chain's tokens.css in
+// parent→child order. The design's own file may also <link> these directly
+// for file-open-in-browser compatibility; the additional injection guarantees
+// the chain is always present even when the link paths are wrong.
+function injectTokensChain(frame: HTMLIFrameElement): void {
+  const doc = frame.contentDocument;
+  if (!doc) return;
+  // Remove any previously injected chain so a DS swap doesn't stack.
+  for (const el of Array.from(doc.querySelectorAll("link[data-od-tokens-link]"))) {
+    el.remove();
+  }
+  const dsName =
+    mode === "designs"
+      ? activeDesign?.designSystem
+      : activeDS?.name;
+  if (!dsName) return;
+  const chain = resolveExtendsChain(dsName);
+  for (const ds of chain) {
+    const link = doc.createElement("link");
+    link.rel = "stylesheet";
+    link.setAttribute("data-od-tokens-link", ds.name);
+    link.href = `${DATA_ROOT}/design-systems/${ds.name}/tokens.css`;
+    doc.head.prepend(link);
+  }
+}
+
 function syncIframeBackground(frame: HTMLIFrameElement): void {
   const doc = frame.contentDocument;
   const win = doc?.defaultView;
@@ -440,8 +672,6 @@ function syncIframeBackground(frame: HTMLIFrameElement): void {
   frame.style.backgroundColor = bg ?? "";
 }
 
-// Inject a click listener for [data-od-link] into the draft document. The
-// listener posts a navigation message up to the parent viewer.
 function injectNavScript(frame: HTMLIFrameElement): void {
   const doc = frame.contentDocument;
   if (!doc) return;
@@ -455,10 +685,10 @@ function injectNavScript(frame: HTMLIFrameElement): void {
 const NAV_SCRIPT = `
 (function(){
   document.addEventListener('click', function(e){
-    var link = e.target.closest('[data-od-link]');
+    var link = e.target.closest('[data-od-page]');
     if (!link) return;
     e.preventDefault();
-    var spec = link.getAttribute('data-od-link') || '';
+    var spec = link.getAttribute('data-od-page') || '';
     var parts = spec.split(':');
     parent.postMessage({
       type: 'od:navigate',
@@ -502,24 +732,21 @@ const SCROLLBAR_DEFAULTS_CSS = `
 function handleFrameMessage(e: MessageEvent): void {
   const data = e.data;
   if (!data || data.type !== "od:navigate") return;
-  // Ignore messages that arrive before the first draft is fully wired (e.g.
-  // a residual click handler from a prior document firing during iframe swap).
-  if (!activeProject || !activePage || !activeVariant) {
+  if (!activePage || !activeVariant) {
     console.warn("[od] navigate message dropped – viewer not ready", data);
     return;
   }
+  const ctx = activeContext();
+  if (!ctx) return;
 
   const targetPageId = String(data.pageId || "");
   const targetVariantId = data.variantId ? String(data.variantId) : null;
-  const next = activeProject.pages.find((p) => p.id === targetPageId);
+  const next = ctx.pages.find((p) => p.id === targetPageId);
   if (!next) {
-    showToast(`No page "${targetPageId}" in this design.`);
+    showToast(`No page "${targetPageId}" in this ${mode === "designs" ? "design" : "design system"}.`);
     return;
   }
 
-  // Fullscreen persists across in-draft navigation by design – the user is
-  // walking through a flow and shouldn't be yanked out of fullscreen on every
-  // hop. Escape (or the fullscreen button) exits when they're done.
   pageHistory.push({ pageId: activePage.id, variantId: activeVariant.id });
   renderBackButton();
   selectPage(next, { variantId: targetVariantId, fade: true });
@@ -528,8 +755,9 @@ function handleFrameMessage(e: MessageEvent): void {
 function goBack(): void {
   const prev = pageHistory.pop();
   renderBackButton();
-  if (!prev || !activeProject) return;
-  const page = activeProject.pages.find((p) => p.id === prev.pageId);
+  const ctx = activeContext();
+  if (!prev || !ctx) return;
+  const page = ctx.pages.find((p) => p.id === prev.pageId);
   if (!page) return;
   selectPage(page, { variantId: prev.variantId, fade: true });
 }
@@ -541,29 +769,48 @@ function renderBackButton(): void {
 // Selectors -----------------------------------------------------------------
 
 function populateDesignSelect(): void {
-  if (!activeProject) return;
   designSelect.innerHTML = "";
-  for (const p of projects) {
+  for (const p of designs) {
     const opt = document.createElement("option");
-    opt.value = p.project;
-    opt.textContent = hasAnyChosen(p.chosen) ? `★ ${p.project}` : p.project;
-    if (p.project === activeProject.project) opt.selected = true;
+    opt.value = p.name;
+    opt.textContent = hasAnyChosen(p.chosen) ? `★ ${p.name}` : p.name;
+    if (activeDesign && p.name === activeDesign.name) opt.selected = true;
     designSelect.appendChild(opt);
   }
+  document.body.classList.toggle("no-designs", designs.length === 0);
+  document.body.classList.toggle("no-multi-design", designs.length < 2);
+}
+
+function populateDsSelect(): void {
+  dsSelect.innerHTML = "";
+  for (const ds of designSystems) {
+    const opt = document.createElement("option");
+    opt.value = ds.name;
+    opt.textContent = ds.manifest.extends ? `${ds.name} (extends ${ds.manifest.extends})` : ds.name;
+    if (mode === "design-systems") {
+      if (activeDS && ds.name === activeDS.name) opt.selected = true;
+    } else {
+      if (activeDesign?.designSystem === ds.name) opt.selected = true;
+    }
+    dsSelect.appendChild(opt);
+  }
+  document.body.classList.toggle("no-ds", designSystems.length === 0);
 }
 
 function populatePageSelect(): void {
-  if (!activeProject || !activePage) return;
+  const ctx = activeContext();
+  if (!ctx || !activePage) return;
   pageSelect.innerHTML = "";
-  for (const p of activeProject.pages) {
+  for (const p of ctx.pages) {
     const opt = document.createElement("option");
     opt.value = p.id;
-    const starred = getChosenForPage(activeProject, p.id) ? "★ " : "";
+    const starred =
+      mode === "designs" && getChosenForPage(activeDesign, p.id) ? "★ " : "";
     opt.textContent = `${starred}${p.label ?? p.id}`;
     if (p.id === activePage.id) opt.selected = true;
     pageSelect.appendChild(opt);
   }
-  document.body.classList.toggle("no-multi-page", activeProject.pages.length < 2);
+  document.body.classList.toggle("no-multi-page", ctx.pages.length < 2);
 }
 
 function hasAnyChosen(chosen: Chosen | undefined): boolean {
@@ -572,10 +819,6 @@ function hasAnyChosen(chosen: Chosen | undefined): boolean {
 }
 
 // localStorage keys ---------------------------------------------------------
-//
-// All dynamic segments are URL-encoded before concatenation so an ID
-// containing a colon can't alias across keys (e.g. design "a:b" + page "c"
-// must not collide with design "a" + page "b:c").
 
 function encKey(...parts: string[]): string {
   return parts.map((p) => encodeURIComponent(p)).join(":");
@@ -587,26 +830,32 @@ function loadActiveDesign(): string | null {
 function saveActiveDesign(name: string): void {
   try { localStorage.setItem(ACTIVE_DESIGN_KEY, name); } catch { /* ignore */ }
 }
-function loadActivePage(design: string): string | null {
-  try { return localStorage.getItem(`od:active-page:${encodeURIComponent(design)}`); } catch { return null; }
+function loadActiveDS(): string | null {
+  try { return localStorage.getItem(ACTIVE_DS_KEY); } catch { return null; }
 }
-function saveActivePage(design: string, pageId: string): void {
-  try { localStorage.setItem(`od:active-page:${encodeURIComponent(design)}`, pageId); } catch { /* ignore */ }
+function saveActiveDS(name: string): void {
+  try { localStorage.setItem(ACTIVE_DS_KEY, name); } catch { /* ignore */ }
 }
-function loadActiveVariant(design: string, pageId: string): string | null {
-  try { return localStorage.getItem(`od:active-variant:${encKey(design, pageId)}`); } catch { return null; }
+function loadActivePage(ctxKey: string): string | null {
+  try { return localStorage.getItem(`od:active-page:${encodeURIComponent(ctxKey)}`); } catch { return null; }
 }
-function saveActiveVariant(design: string, pageId: string, variantId: string): void {
-  try { localStorage.setItem(`od:active-variant:${encKey(design, pageId)}`, variantId); } catch { /* ignore */ }
+function saveActivePage(ctxKey: string, pageId: string): void {
+  try { localStorage.setItem(`od:active-page:${encodeURIComponent(ctxKey)}`, pageId); } catch { /* ignore */ }
+}
+function loadActiveVariant(ctxKey: string, pageId: string): string | null {
+  try { return localStorage.getItem(`od:active-variant:${encKey(ctxKey, pageId)}`); } catch { return null; }
+}
+function saveActiveVariant(ctxKey: string, pageId: string, variantId: string): void {
+  try { localStorage.setItem(`od:active-variant:${encKey(ctxKey, pageId)}`, variantId); } catch { /* ignore */ }
 }
 
 // Panel ---------------------------------------------------------------------
 
 function renderPanel(): void {
-  if (!activeProject || !activePage || !activeVariant) return;
-  const tweaks = collectTweaks(activeProject.index, activePage, activeVariant);
+  if (!activePage || !activeVariant) return;
+  const tweaks = collectTweaks(activeDesign?.index, activePage, activeVariant);
   const variants = activePage.variants.map((v) => ({ id: v.id, label: v.label ?? v.id }));
-  const chosenForPage = getChosenForPage(activeProject, activePage.id);
+  const chosenForPage = mode === "designs" ? getChosenForPage(activeDesign, activePage.id) : undefined;
 
   renderTweaksPanel({
     root: tweaksBody,
@@ -621,33 +870,38 @@ function renderPanel(): void {
     values: tweakValues,
     onChange: (id, value) => {
       tweakValues[id] = value;
-      saveStoredValues(
-        activeProject!.project,
-        activePage!.id,
-        activeVariant!.id,
-        tweakValues,
-      );
+      const ctx = activeContext();
+      const ctxName = mode === "designs" ? activeDesign?.name : activeDS ? `ds:${activeDS.name}` : "";
+      if (ctxName && activePage && activeVariant) {
+        saveStoredValues(ctxName, activePage.id, activeVariant.id, tweakValues);
+      }
       applyTweaksToIframe(iframe, tweaks, tweakValues);
       syncIframeBackground(iframe);
+      void ctx;
     },
+    // Chosen + finalize only apply in designs mode.
     chosenVariantId: chosenForPage?.variantId,
     pageLabel: activePage.label ?? activePage.id,
-    showFinalizeAll: activeProject.pages.length > 1,
-    onFinalize: () => finalizePage(),
-    onFinalizeAll: () => finalizeAllPages(),
-    onClearChosen: () => clearChosenPage(),
+    showFinalizeAll: mode === "designs" && (activeDesign?.pages.length ?? 0) > 1,
+    onFinalize: mode === "designs" ? () => finalizePage() : undefined,
+    onFinalizeAll: mode === "designs" ? () => finalizeAllPages() : undefined,
+    onClearChosen: mode === "designs" ? () => clearChosenPage() : undefined,
+    // Promote wiring for DS mode.
+    showPromote: mode === "design-systems",
+    onPromote: mode === "design-systems" ? (tweak) => promoteTweak(tweak) : undefined,
   });
   renderChosenPill();
   renderBackButton();
-  // Ensure the chosen marker in the page select reflects current state.
   populatePageSelect();
 }
 
 function renderChosenPill(): void {
   let pill = document.getElementById("chosen-pill");
-  const chosenForPage = getChosenForPage(activeProject, activePage?.id);
+  const chosenForPage =
+    mode === "designs" ? getChosenForPage(activeDesign, activePage?.id) : undefined;
   const show =
-    activeProject &&
+    mode === "designs" &&
+    activeDesign &&
     activePage &&
     activeVariant &&
     chosenForPage?.variantId === activeVariant.id;
@@ -664,7 +918,7 @@ function renderChosenPill(): void {
 }
 
 async function finalizePage(): Promise<void> {
-  if (!activeProject || !activePage || !activeVariant) return;
+  if (!activeDesign || !activePage || !activeVariant) return;
   const entry: ChosenPage = {
     variantId: activeVariant.id,
     tweaks: { ...tweakValues },
@@ -684,13 +938,12 @@ async function finalizePage(): Promise<void> {
 }
 
 async function finalizeAllPages(): Promise<void> {
-  if (!activeProject) return;
+  if (!activeDesign) return;
   const allPages: Record<string, ChosenPage> = {};
-  for (const page of activeProject.pages) {
-    const variantId = loadActiveVariant(activeProject.project, page.id)
-      ?? page.variants[0]?.id;
+  for (const page of activeDesign.pages) {
+    const variantId = loadActiveVariant(activeDesign.name, page.id) ?? page.variants[0]?.id;
     if (!variantId) continue;
-    const stored = loadStoredValues(activeProject.project, page.id, variantId);
+    const stored = loadStoredValues(activeDesign.name, page.id, variantId);
     allPages[page.id] = { variantId, tweaks: stored };
   }
   try {
@@ -705,7 +958,7 @@ async function finalizeAllPages(): Promise<void> {
 }
 
 async function clearChosenPage(): Promise<void> {
-  if (!activeProject || !activePage) return;
+  if (!activeDesign || !activePage) return;
   try {
     const res = await postFinalize({ clearPage: activePage.id });
     applyChosenResponse(res);
@@ -717,8 +970,8 @@ async function clearChosenPage(): Promise<void> {
 }
 
 async function postFinalize(body: unknown): Promise<{ chosen: Chosen | null }> {
-  if (!activeProject) throw new Error("no active project");
-  const r = await fetch(`${DATA_ROOT}/drafts/${activeProject.project}/finalize`, {
+  if (!activeDesign) throw new Error("no active design");
+  const r = await fetch(`${DATA_ROOT}/designs/${activeDesign.name}/finalize`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -728,17 +981,35 @@ async function postFinalize(body: unknown): Promise<{ chosen: Chosen | null }> {
 }
 
 function applyChosenResponse(res: { chosen: Chosen | null }): void {
-  if (!activeProject) return;
+  if (!activeDesign) return;
   if (res.chosen) {
-    activeProject.chosen = res.chosen;
-    activeProject.index.chosen = res.chosen;
+    activeDesign.chosen = res.chosen;
+    activeDesign.index.chosen = res.chosen;
   } else {
-    activeProject.chosen = undefined;
-    delete activeProject.index.chosen;
+    activeDesign.chosen = undefined;
+    delete activeDesign.index.chosen;
   }
   populateDesignSelect();
   populatePageSelect();
   renderPanel();
+}
+
+async function promoteTweak(tweak: Tweak): Promise<void> {
+  if (!activeDS) return;
+  const value = tweakValues[tweak.id];
+  if (value === undefined) return;
+  try {
+    const r = await fetch(`${DATA_ROOT}/design-systems/${activeDS.name}/promote`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ target: tweak.target, value }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    showToast(`Promoted ${tweak.target} → tokens.css.`);
+  } catch (err) {
+    console.error(err);
+    showToast(`Promote failed: ${(err as Error).message}`);
+  }
 }
 
 function togglePicker(force?: boolean): void {
@@ -757,14 +1028,26 @@ function toggleTweaksPanel(force?: boolean): void {
 
 function onCopy(prompt: string): void {
   const selections = picker.getSelections();
-  if (selections.length === 0 || !activeVariant || !activeProject) return;
-  const payload = buildPayload({
-    project: activeProject.project,
-    file: activeVariant.file,
-    selections,
-    prompt,
-    activeTweaks: tweakValues,
-  });
+  if (selections.length === 0 || !activeVariant) return;
+  let ctx: PayloadContext | null = null;
+  if (mode === "designs" && activeDesign) {
+    ctx = {
+      mode: "designs",
+      name: activeDesign.name,
+      pageId: activePage?.id,
+      variantId: activeVariant.id,
+      designSystem: activeDesign.designSystem,
+    };
+  } else if (mode === "design-systems" && activeDS) {
+    ctx = {
+      mode: "design-systems",
+      name: activeDS.name,
+      pageId: activePage?.id,
+      variantId: activeVariant.id,
+    };
+  }
+  if (!ctx) return;
+  const payload = buildPayload({ ctx, selections, prompt, activeTweaks: tweakValues });
   navigator.clipboard
     .writeText(payload)
     .then(() => {
@@ -777,35 +1060,22 @@ function onCopy(prompt: string): void {
 
 function showEmpty(): void {
   iframe.hidden = true;
-  emptyState.hidden = false;
-  projectLabel.textContent = "0 drafts";
-  activeProject = null;
+  if (mode === "designs") {
+    emptyState.hidden = false;
+    emptyStateDs.hidden = true;
+    projectLabel.textContent = "0 designs";
+  } else {
+    emptyState.hidden = true;
+    emptyStateDs.hidden = false;
+    projectLabel.textContent = "0 design systems";
+  }
+  activeDesign = null;
+  activeDS = null;
   activePage = null;
   activeVariant = null;
   clearPageHistory();
   picker.setEnabled(false);
   document.body.classList.add("no-drafts");
-}
-
-// Data loading --------------------------------------------------------------
-
-async function loadProjects(): Promise<ProjectEntry[]> {
-  const out: ProjectEntry[] = [];
-  try {
-    const rootIndexRes = await fetch(`${DATA_ROOT}/drafts/index.json`);
-    if (rootIndexRes.ok) {
-      const rootIndex = (await rootIndexRes.json()) as { projects: string[] };
-      if (Array.isArray(rootIndex.projects)) {
-        for (const project of rootIndex.projects) {
-          const r = await fetch(`${DATA_ROOT}/drafts/${project}/index.json`);
-          if (r.ok) out.push({ project, index: (await r.json()) as DraftIndex });
-        }
-      }
-    }
-  } catch (err) {
-    console.warn("Failed to load project index:", err);
-  }
-  return out;
 }
 
 // Tweaks panel drag ---------------------------------------------------------

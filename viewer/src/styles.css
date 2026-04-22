@@ -161,8 +161,49 @@ body.no-multi-design #design-select-group {
   display: none;
 }
 
+body.mode-design-systems #design-select-group {
+  display: none;
+}
+
+body.no-ds #ds-select-group {
+  display: none;
+}
+
 body.no-multi-page #page-select-group {
   display: none;
+}
+
+/* Mode toggle ------------------------------------------------------------- */
+
+#mode-toggle {
+  display: inline-flex;
+  gap: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px;
+}
+
+#mode-toggle button {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+#mode-toggle button:hover {
+  color: var(--text);
+  border: none;
+}
+
+#mode-toggle button[aria-selected="true"] {
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
 }
 
 #back-btn {
@@ -375,6 +416,7 @@ body.no-drafts #tweaks-panel,
 body.no-drafts #picker-toggle,
 body.no-drafts #tweaks-toggle,
 body.no-drafts #design-select-group,
+body.no-drafts #ds-select-group,
 body.no-drafts #page-select-group,
 body.no-drafts #back-btn {
   display: none !important;
@@ -477,6 +519,30 @@ body.no-drafts #back-btn {
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+.tweak-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tweak-promote {
+  padding: 2px 8px;
+  font-size: 10px;
+  line-height: 1.4;
+  border-radius: 4px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  background: transparent;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.tweak-promote:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .tweak select,
