@@ -70,6 +70,25 @@ body {
   font-size: 12px;
 }
 
+#design-select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  cursor: pointer;
+}
+
+#design-select:hover {
+  border-color: var(--accent);
+}
+
+body.no-multi-design #design-select {
+  display: none;
+}
+
 button {
   background: transparent;
   color: var(--text);
@@ -263,7 +282,8 @@ button[role="switch"]:focus-visible .switch-track {
    Hide them so the empty-state onboarding has the stage to itself. */
 body.no-drafts #tweaks-panel,
 body.no-drafts #picker-toggle,
-body.no-drafts #tweaks-toggle {
+body.no-drafts #tweaks-toggle,
+body.no-drafts #design-select {
   display: none !important;
 }
 

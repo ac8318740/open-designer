@@ -13,6 +13,7 @@ import {
 import type { DraftEntry, DraftIndex, ProjectEntry, Tweak } from "./types";
 
 const DATA_ROOT = "/data";
+const ACTIVE_DESIGN_KEY = "od:active-design";
 
 // State ---------------------------------------------------------------------
 
@@ -28,6 +29,7 @@ const iframe = document.getElementById("draft-frame") as HTMLIFrameElement;
 const stage = document.getElementById("stage")!;
 const emptyState = document.getElementById("empty-state")!;
 const projectLabel = document.getElementById("project-label")!;
+const designSelect = document.getElementById("design-select") as HTMLSelectElement;
 const pickerToggle = document.getElementById("picker-toggle") as HTMLButtonElement;
 const tweaksToggle = document.getElementById("tweaks-toggle") as HTMLButtonElement;
 const refreshBtn = document.getElementById("refresh-btn") as HTMLButtonElement;
@@ -69,6 +71,7 @@ pickerToggle.addEventListener("click", () => togglePicker());
 tweaksToggle.addEventListener("click", () => toggleTweaksPanel());
 tweaksClose.addEventListener("click", () => toggleTweaksPanel(false));
 refreshBtn.addEventListener("click", () => refresh());
+designSelect.addEventListener("change", () => selectDesign(designSelect.value));
 
 document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "k") {
@@ -117,14 +120,63 @@ async function refresh(): Promise<void> {
   emptyState.hidden = true;
   iframe.hidden = false;
 
-  const proj = projects.find((p) => p.project === prevProjectName) ?? projects[0];
+  const storedDesign = loadActiveDesign();
+  const proj =
+    projects.find((p) => p.project === prevProjectName) ??
+    projects.find((p) => p.project === storedDesign) ??
+    projects[0];
   activeProject = proj;
+  document.body.classList.toggle("no-multi-design", projects.length < 2);
+  populateDesignSelect();
+
   const draft = proj.index.drafts.find((d) => d.id === prevDraftId) ?? proj.index.drafts[0];
   if (!draft) {
     showEmpty();
     return;
   }
   selectDraft(draft);
+}
+
+function selectDesign(name: string): void {
+  const next = projects.find((p) => p.project === name);
+  if (!next) return;
+  activeProject = next;
+  saveActiveDesign(name);
+  populateDesignSelect();
+  const draft = next.index.drafts[0];
+  if (!draft) {
+    showEmpty();
+    return;
+  }
+  selectDraft(draft);
+}
+
+function populateDesignSelect(): void {
+  if (!activeProject) return;
+  designSelect.innerHTML = "";
+  for (const p of projects) {
+    const opt = document.createElement("option");
+    opt.value = p.project;
+    opt.textContent = p.project;
+    if (p.project === activeProject.project) opt.selected = true;
+    designSelect.appendChild(opt);
+  }
+}
+
+function loadActiveDesign(): string | null {
+  try {
+    return localStorage.getItem(ACTIVE_DESIGN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function saveActiveDesign(name: string): void {
+  try {
+    localStorage.setItem(ACTIVE_DESIGN_KEY, name);
+  } catch {
+    /* ignore */
+  }
 }
 
 function selectDraft(draft: DraftEntry): void {
