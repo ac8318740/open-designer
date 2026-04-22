@@ -3,7 +3,7 @@ export interface TweakSelectOption {
   value: string;
 }
 
-export type TweakType = "select" | "color" | "slider" | "toggle" | "text";
+export type TweakType = "select" | "color" | "slider" | "toggle" | "text" | "state";
 
 export interface Tweak {
   id: string;

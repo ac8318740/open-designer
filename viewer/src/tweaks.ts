@@ -82,7 +82,8 @@ function defaultFor(tweak: Tweak): string {
       return String(tweak.min ?? 0);
     case "color":
       return "#000000";
-    case "select": {
+    case "select":
+    case "state": {
       const first = tweak.options?.[0];
       if (first === undefined) return "";
       return typeof first === "string" ? first : first.value;
@@ -110,6 +111,7 @@ export function cssValueFor(tweak: Tweak, raw: string): string {
       return `${raw}${unit}`;
     }
     case "select":
+    case "state":
       return resolveSelectValue(tweak, raw);
     case "toggle":
       return raw === "1" ? (tweak.on ?? "1") : (tweak.off ?? "0");
@@ -125,16 +127,22 @@ export function applyTweaksToIframe(
 ): void {
   const doc = iframe.contentDocument;
   if (!doc) return;
-  const css = tweaks
-    .map((t) => `${t.target}: ${cssValueFor(t, values[t.id] ?? defaultFor(t))};`)
-    .join(" ");
+  const cssParts: string[] = [];
+  for (const t of tweaks) {
+    const resolved = cssValueFor(t, values[t.id] ?? defaultFor(t));
+    if (t.type === "state") {
+      doc.documentElement.setAttribute("data-state", resolved);
+    } else {
+      cssParts.push(`${t.target}: ${resolved};`);
+    }
+  }
   let style = doc.getElementById("od-tweaks-vars") as HTMLStyleElement | null;
   if (!style) {
     style = doc.createElement("style");
     style.id = "od-tweaks-vars";
     doc.head.appendChild(style);
   }
-  style.textContent = `:root { ${css} }`;
+  style.textContent = `:root { ${cssParts.join(" ")} }`;
 }
 
 export function renderTweaksPanel(args: {
@@ -275,7 +283,8 @@ function renderTweak(
 
   let control: HTMLElement;
   switch (tweak.type) {
-    case "select": {
+    case "select":
+    case "state": {
       const select = document.createElement("select");
       select.id = `tweak-${tweak.id}`;
       for (const opt of tweak.options ?? []) {

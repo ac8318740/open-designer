@@ -123,6 +123,8 @@ Emit at minimum: `colors.html`, `type.html`, `spacing.html`, `radius.html`, `sha
 
 Pick the most-visited real route (heuristic: entry point, dashboard, or the first route in `routes.md`) and write `pages/<slug>/01-default.html`. The page uses only DS tokens and the components from `briefing/components.md`. Add `pages/index.json` in the DS's `pages/` folder listing the page and its variants (same shape as the `design` skill's index, without `chosen`).
 
+The playable must render the stacked states derived from the briefing evidence per `PAGES.md` – one surface showing the interesting states side-by-side (running + errored + empty, etc.), not a single happy-path state.
+
 ## Greenfield branch
 
 Skip the codebase scan – there's nothing to scan. Ask for the depth via `AskUserQuestion`:

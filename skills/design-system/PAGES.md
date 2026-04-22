@@ -58,7 +58,32 @@ Every playable page:
 - Respects `voice.md`, `rules.md`, and `gaps.md`. If the DS bans exclamations, the landing copy must not exclaim.
 - Includes variants that exercise different tweak axes – density, motion, accent – not content variants. The DS isn't a product, so "log vs detail" is pointless here; "cozy vs roomy" is the right kind of axis.
 
+## Stacked states
+
+A playable page's job is to exercise the DS's tokens and rules under pressure. A single populated happy-path screen doesn't do that – skeletons, errors, empty states, diffs, and streaming all reveal different tokens and different voice. The playable must render them side-by-side on one surface, not one state per file.
+
+Derive the state set from briefing evidence, not from a checklist:
+
+- Before writing a playable, scan `briefing/components.md` and `briefing/extractable-components.md` for state-revealing components: Skeleton, Spinner, ErrorBoundary, EmptyState, diff decorators, toasts, disabled / loading / destructive treatments, streaming indicators. For each one the codebase actually has, the playable must render at least one instance of that state.
+- If a component family is **absent** (no skeleton anywhere, no error boundary), do not invent one. Honest shallowness beats fabricated depth. `gaps.md` should already flag absences – consult it.
+- Aim for at least three distinct states per playable when the inventory supports it (e.g. a dashboard with a running row, an errored row, and an empty section). If the inventory only supports one, ship one – don't pad.
+- List the chosen states and their evidence in an HTML comment at the top of the playable file, in the same **Why:** shape `rules.md` uses. Reviewers can audit the derivation.
+
+Example header:
+
+```html
+<!--
+  States rendered:
+  - running cell – evidence: briefing/components.md lists `RunningIndicator` (src/components/cell/Running.tsx)
+  - diffed cell  – evidence: briefing/extractable-components.md notes an inline diff decorator in src/pages/Notebook.tsx
+  - errored cell – evidence: briefing/components.md lists `ErrorBoundary` (src/lib/errors.tsx)
+  Why this set: the notebook surface is where cell lifecycle pressure tests the DS's tokens (fg-running, bg-errored, border-diffed).
+-->
+```
+
 ## Template menu (pick freely – 1 is fine, 5 is fine)
+
+Illustration only – your state set comes from the briefing, not from this menu. The templates below describe *layouts* worth exercising; the states rendered inside each one must still be derived per the rule above.
 
 For the 30-minute greenfield flow and for brownfield when the user wants more than one page, pick from:
 
@@ -76,6 +101,8 @@ Playable pages **can** declare tweaks in `index.json` the same way designs do. T
 
 - In DS mode, each tweak gets a **Promote** button in the tweaks panel. Click = write the tweak's current value to `tokens.css` `:root` for the matching `--<prefix>-*` variable. Then the tweak UI stays bound to the new default.
 - Without Promote, tweaks are local to the DS – they don't cascade to designs.
+
+The `state` tweak type (see `design/SKILL.md` step 8) is useful on playables that render stacked states: it flips a `data-state` attribute on the iframe root so the user can switch between states without duplicating HTML files.
 
 Declare tweaks sparingly in playable pages. A tweak that doesn't map to a real DS token is noise – use it only when you're intentionally proposing a new token value the user might want to promote.
 

@@ -96,6 +96,7 @@ Common gaps to check:
 - **Motion** – durations and easings pinned or ad-hoc?
 - **Ad-hoc hex values** – grep for `#` hex literals outside `globals.css` / `tokens.css`. Each hit is a candidate for a missing token.
 - **Accessibility primitives** – focus rings, contrast pairs, reduced-motion.
+- **Absent state-revealing components** – scan for Skeleton, Spinner, ErrorBoundary, EmptyState, diff decorators, toasts, streaming indicators, disabled treatments. Record each family that is **missing** from the codebase so the playable-page step (see `PAGES.md` "Stacked states") knows not to fabricate it. Honest shallowness beats fabricated depth.
 
 Every `gaps.md` entry must be a real gap – not a design critique. "The CTA could be bolder" is not a gap; "the CTA does not bind to a token – hardcoded `#111827` at src/components/Cta.tsx:14" is.
 

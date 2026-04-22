@@ -59,6 +59,7 @@ Before writing or editing any HTML:
 - **Apply `voice.md` to every string** – casing, punctuation rules, length bias, sample-string flavor for placeholders.
 - **Honour `rules.md`.** Before writing card markup, check the cards rules. Before writing a destructive button, check the danger rules.
 - **Avoid flagged-substitution assets.** If `gaps.md` says no real logo, use the placeholder pattern; if Geist Mono isn't available, fall back per gaps.md guidance.
+- **Variants render realistic scenes, not single states.** When a page has state-revealing components in the briefing (skeleton, error, empty, populated, streaming, diffed), each variant renders the interesting states simultaneously – a populated row next to a skeleton row next to an empty row – so the variant's treatment is visible across states. Derive the state set from `briefing/components.md` + `briefing/extractable-components.md` + `gaps.md`, not from a checklist. Don't produce separate files just to show state differences; that is what the `state` tweak is for (see step 8).
 
 ### Iteration from a pasted selection
 
@@ -100,7 +101,7 @@ For each request:
 1. Resolve the active DS chain and load the briefing (see above).
 2. Trace the imports of the target page or component to load the relevant code context. Stop at framework boundaries.
 3. Decide the **page set**: list the distinct screens the request covers. A single-page request is one page called e.g. `main`. A multi-page request (log + detail, tabs, wizard steps) gets one page entry per screen.
-4. For each page, write `00-current.html` (pixel-perfect replica of the current state, if any) plus 2 to 4 variants as `01-*.html`, `02-*.html`, etc. Use short slug names (`01-tighter-spacing.html`, `02-amber-cta.html`).
+4. For each page, write `00-current.html` (pixel-perfect replica of the current state, if any) plus 2 to 4 variants as `01-*.html`, `02-*.html`, etc. Use short slug names (`01-tighter-spacing.html`, `02-amber-cta.html`). When the page has state-revealing components in the briefing, each variant renders the stacked states on one surface (populated + loading + errored + empty) so the treatment can be judged across states – not only against the happy path.
 5. Each HTML file `<link>`s the DS tokens chain. Relative path from the design file:
 
    ```html
@@ -179,16 +180,17 @@ For each request:
    }
    ```
 
-   Tweak types: `slider` (min, max, step, unit), `color` (hex), `select` (options as strings or `{label, value}`), `toggle` (`on`/`off` values), `text`. Merge order at render time: design → page → variant.
+   Tweak types: `slider` (min, max, step, unit), `color` (hex), `select` (options as strings or `{label, value}`), `toggle` (`on`/`off` values), `state` (options as strings or `{label, value}` – flips `data-state` on `:root`, use `[data-state="errored"]` selectors in CSS), `text`. Merge order at render time: design → page → variant.
 
    **Pick by the shape of the axis, not by habit:**
    - Continuous numeric range → `slider` (padding, radius, font size, shadow blur).
    - Open color choice → `color` (accent, surface, CTA bg).
    - Categorical preset, 3+ named options → `select` (density cozy/comfy/roomy, corner style square/soft/pill, layout mode grid/list).
    - Binary on/off flip → `toggle` (show ornament, dark section, underline links, gradient background).
+   - Surface state switch → `state` (populated / loading / empty / errored). Unlike `select`, this writes the chosen value to a `data-state` attribute on the iframe root instead of a CSS custom property. The variant's HTML renders all states stacked by default; `data-state` on `:root` is a hook for showing one at a time.
    - Free-form string → `text` (rare).
 
-   The `target` is the CSS variable the control writes to. Keep variants as separate HTML files for structural differences; use tweaks for parametric adjustments.
+   The `target` is the CSS variable the control writes to (ignored for `state`, which always writes `data-state`). Keep variants as separate HTML files for structural differences; use tweaks for parametric adjustments.
 
    **Legacy shape**: designs written before pages existed used a flat `drafts: []` array at the top level. The viewer still reads those, normalized to a single implicit `main` page. Do not write that shape.
 

@@ -12,6 +12,12 @@ For every screen in the request, ask:
 
 If two candidates both have the same content shape but differ in layout density, emphasis, or color – they are variants of the same page, not different pages.
 
+## States are not pages
+
+Loading, empty, errored, populated, streaming, diffed – these are **states within a variant**, not pages and not variants. Do not create `log-loading`, `log-empty`, `log-populated` as sibling pages. Do not create `01-loading`, `02-errored`, `03-populated` as sibling variants either.
+
+A variant renders the interesting states **on one surface at once** – a populated row sitting next to a skeleton row sitting next to an errored row. That's what makes a DS's tokens visible across state pressure. If the user needs to step through states one at a time in the viewer, use the `state` tweak (see `SKILL.md` step 8) – it flips `data-state` on the iframe root without duplicating files.
+
 ## Worked examples
 
 ### 1. List + detail
