@@ -125,7 +125,8 @@ body.fullscreen-mode #stage {
 }
 
 #design-select,
-#page-select {
+#page-select,
+#ds-select {
   background: var(--panel-2);
   color: var(--text);
   border: 1px solid var(--border);
@@ -137,7 +138,8 @@ body.fullscreen-mode #stage {
 }
 
 #design-select:hover,
-#page-select:hover {
+#page-select:hover,
+#ds-select:hover {
   border-color: var(--accent);
 }
 
