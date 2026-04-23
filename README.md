@@ -22,13 +22,13 @@ This plugin ships through the `ac8318740-plugins` marketplace. After adding the 
 1. Run `/design-system` once per project to capture the design system (or point at an existing one).
 2. Ask Claude to design or iterate on a page. The `design` skill triggers automatically and reads from the active DS.
 3. Claude writes designs to `.open-designer/designs/<name>/` and an `index.json` listing them.
-4. Run the viewer:
+4. Run the viewer from your repo root:
 
    ```
-   node plugins/open-designer/launcher/serve.mjs
+   npx open-designer-viewer
    ```
 
-   It picks a free port, serves the viewer at `/`, exposes `.open-designer/` at `/data/`, and opens your browser.
+   It picks a free port, serves the viewer at `/`, exposes `.open-designer/` at `/data/`, and opens your browser. Override the port with `OPEN_DESIGNER_PORT=5200 npx open-designer-viewer`. Skip auto-open with `OPEN_DESIGNER_NO_OPEN=1 npx open-designer-viewer`.
 5. Click any element in any design. Type your intent. Hit copy. Paste into Claude Code. Claude edits the target design.
 6. In Design systems mode, tweak tokens and click Promote to write values back to `tokens.css`.
 
@@ -41,8 +41,14 @@ skills/design/               – the design-loop workflow Claude follows
 skills/design-integrate/     – port a finalized design into the codebase
 viewer/                      – static viewer (Vite build)
 launcher/serve.mjs           – zero-dep static server
+package.json                 – also published to npm as `open-designer-viewer` (for `npx open-designer-viewer`)
+RELEASING.md                 – how to publish a new version
 LICENSE                      – MIT
 ```
+
+## Releasing
+
+See [RELEASING.md](./RELEASING.md). Short version: bump `.claude-plugin/plugin.json` version, then `npm run release` from this directory. The plugin and the npm package must stay in lock-step.
 
 ## License
 

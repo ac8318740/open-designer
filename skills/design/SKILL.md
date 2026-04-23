@@ -207,13 +207,13 @@ For each request:
 
    Wire obvious connections by default – the user should not have to ask. See `PAGES.md` for patterns (list → detail, tabs, modal open, auth flow).
 
-10. Tell the user how to launch the viewer:
+10. Tell the user how to launch the viewer (from their repo root):
 
     ```
-    node plugins/open-designer/launcher/serve.mjs
+    npx open-designer-viewer
     ```
 
-    The launcher serves the viewer at `/` and `.open-designer/` at `/data/`, picks a free port, and opens the browser.
+    Picks a free port, serves the viewer at `/` and `.open-designer/` at `/data/`, and opens the browser. Override the port with `OPEN_DESIGNER_PORT=5200 npx open-designer-viewer`. Skip auto-open with `OPEN_DESIGNER_NO_OPEN=1 npx open-designer-viewer`.
 
 ## Design-system fidelity (non-negotiable)
 

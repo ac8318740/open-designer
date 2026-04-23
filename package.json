@@ -1,0 +1,43 @@
+{
+  "name": "open-designer-viewer",
+  "version": "0.4.0",
+  "description": "Local design loop – Claude writes HTML designs against a first-class design system, you click elements in a viewer to iterate.",
+  "license": "MIT",
+  "author": "ac8318740",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ac8318740/ac8318740-plugins.git",
+    "directory": "plugins/open-designer"
+  },
+  "homepage": "https://github.com/ac8318740/ac8318740-plugins/tree/main/plugins/open-designer",
+  "keywords": [
+    "design",
+    "design-system",
+    "ui",
+    "html",
+    "viewer",
+    "iterate",
+    "local",
+    "claude"
+  ],
+  "type": "module",
+  "bin": {
+    "open-designer": "launcher/serve.mjs"
+  },
+  "files": [
+    "launcher/",
+    "viewer/dist/",
+    ".claude-plugin/",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "sync-version": "node scripts/sync-version.mjs",
+    "build:viewer": "npm --prefix viewer install --no-audit --no-fund && npm --prefix viewer run build",
+    "prepublishOnly": "npm run sync-version && npm run build:viewer",
+    "release": "node scripts/release.mjs"
+  }
+}

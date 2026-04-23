@@ -59,8 +59,10 @@ After emitting files, tell the user:
 ```
 Design system `<name>` is ready. Open the viewer and switch to Design systems mode to iterate:
 
-  node plugins/open-designer/launcher/serve.mjs
+  npx open-designer-viewer
 ```
+
+Run it from the repo root.
 
 ## Edit flow
 
