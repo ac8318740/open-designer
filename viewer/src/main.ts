@@ -254,20 +254,37 @@ refresh().catch((err) => {
   showEmpty();
 });
 
-// Dev-time hot reload. In production builds `import.meta.hot` is undefined.
+// Hot reload. `import.meta.hot` is truthy only under `vite dev`; in the
+// shipped bundle that branch is dead-code-eliminated and SSE from the
+// zero-dep launcher drives the reload instead. Event name + payload shape
+// match across both transports.
+function onDataChanged(path: string): void {
+  if (path.endsWith("/index.json") || path.endsWith("/manifest.json") || path.endsWith("/tokens.css")) {
+    refresh();
+    return;
+  }
+  if (!activeVariant) return;
+  const url = activeVariantUrl();
+  if (url && path === url) {
+    reloadActiveVariant();
+  }
+}
+
 if (import.meta.hot) {
   import.meta.hot.on("open-designer:data-changed", (payload: { path: string }) => {
-    const path = payload.path;
-    if (path.endsWith("/index.json") || path.endsWith("/manifest.json") || path.endsWith("/tokens.css")) {
-      refresh();
-      return;
-    }
-    if (!activeVariant) return;
-    const url = activeVariantUrl();
-    if (url && path === url) {
-      reloadActiveVariant();
+    onDataChanged(payload.path);
+  });
+} else if (typeof EventSource !== "undefined") {
+  const source = new EventSource("/__od/events");
+  source.addEventListener("data-changed", (ev) => {
+    try {
+      const payload = JSON.parse((ev as MessageEvent).data) as { path: string };
+      onDataChanged(payload.path);
+    } catch {
+      /* ignore malformed payload */
     }
   });
+  // EventSource auto-reconnects on error – no manual retry needed.
 }
 
 // Active context helpers ----------------------------------------------------

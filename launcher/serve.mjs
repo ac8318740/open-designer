@@ -4,7 +4,8 @@
 
 import { createServer } from "node:http";
 import { readFile, stat, readdir, writeFile, rename, unlink } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, watch } from "node:fs";
+import { statSync, readdirSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
@@ -317,11 +318,172 @@ async function handlePromote(req, res, ds) {
   }
 }
 
+// Hot reload over Server-Sent Events ----------------------------------------
+//
+// Mirrors the Vite dev plugin's `open-designer:data-changed` event name and
+// `{path}` payload shape so the viewer can reuse the same handler body. The
+// path is relative to DATA_ROOT, forward-slash-normalized.
+
+const sseClients = new Set();
+const debounceTimers = new Map();
+const DEBOUNCE_MS = 75;
+const HEARTBEAT_MS = 20000;
+let manualWatchers = null; // Map<absDir, FSWatcher> when the recursive flag isn't supported.
+
+function shouldIgnoreFilename(name) {
+  if (!name) return true;
+  if (name.endsWith(".tmp")) return true;
+  if (name === ".DS_Store") return true;
+  if (name.endsWith(".swp") || name.endsWith(".swo")) return true;
+  if (name.endsWith("~")) return true;
+  return false;
+}
+
+function broadcastChange(relPath) {
+  const payload = `event: data-changed\ndata: ${JSON.stringify({ path: relPath })}\n\n`;
+  for (const client of sseClients) {
+    try {
+      client.write(payload);
+    } catch {
+      sseClients.delete(client);
+    }
+  }
+}
+
+function scheduleChange(relPath) {
+  const existing = debounceTimers.get(relPath);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    debounceTimers.delete(relPath);
+    broadcastChange(relPath);
+  }, DEBOUNCE_MS);
+  debounceTimers.set(relPath, timer);
+}
+
+function handleWatchEvent(absPath) {
+  if (!absPath.startsWith(DATA_ROOT)) return;
+  const base = absPath.split(/[\\/]/).pop();
+  if (shouldIgnoreFilename(base)) return;
+  let rel = absPath.slice(DATA_ROOT.length).replace(/\\/g, "/");
+  if (rel.startsWith("/")) rel = rel.slice(1);
+  rel = "/" + rel;
+  scheduleChange(rel);
+}
+
+function startManualWatcher() {
+  manualWatchers = new Map();
+  const addDir = (dir) => {
+    if (manualWatchers.has(dir)) return;
+    try {
+      const w = watch(dir, (_eventType, filename) => {
+        if (!filename) return;
+        const abs = join(dir, String(filename));
+        try {
+          const s = statSync(abs);
+          if (s.isDirectory() && !manualWatchers.has(abs)) {
+            walkAndAdd(abs);
+          }
+        } catch {
+          const prev = manualWatchers.get(abs);
+          if (prev) {
+            try { prev.close(); } catch { /* ignore */ }
+            manualWatchers.delete(abs);
+          }
+        }
+        handleWatchEvent(abs);
+      });
+      w.on("error", () => {
+        try { w.close(); } catch { /* ignore */ }
+        manualWatchers.delete(dir);
+      });
+      manualWatchers.set(dir, w);
+    } catch {
+      /* directory vanished between read and watch – ignore */
+    }
+  };
+  const walkAndAdd = (dir) => {
+    addDir(dir);
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      walkAndAdd(join(dir, e.name));
+    }
+  };
+  walkAndAdd(DATA_ROOT);
+}
+
+function stopManualWatcher() {
+  if (!manualWatchers) return;
+  for (const w of manualWatchers.values()) {
+    try { w.close(); } catch { /* ignore */ }
+  }
+  manualWatchers.clear();
+  manualWatchers = null;
+}
+
+let recursiveWatcher = null;
+
+function attachWatcher() {
+  if (!existsSync(DATA_ROOT)) {
+    setTimeout(attachWatcher, 2000);
+    return;
+  }
+  try {
+    recursiveWatcher = watch(DATA_ROOT, { recursive: true }, (_eventType, filename) => {
+      if (!filename) return;
+      handleWatchEvent(join(DATA_ROOT, String(filename)));
+    });
+    recursiveWatcher.on("error", () => {
+      try { recursiveWatcher?.close(); } catch { /* ignore */ }
+      recursiveWatcher = null;
+      setTimeout(attachWatcher, 2000);
+    });
+  } catch {
+    startManualWatcher();
+  }
+}
+
+attachWatcher();
+
+setInterval(() => {
+  for (const client of sseClients) {
+    try {
+      client.write(": ping\n\n");
+    } catch {
+      sseClients.delete(client);
+    }
+  }
+}, HEARTBEAT_MS).unref();
+
+function handleSse(req, res) {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  res.write("retry: 2000\n\n");
+  res.write(": hello\n\n");
+  sseClients.add(res);
+  req.on("close", () => {
+    sseClients.delete(res);
+  });
+}
+
 async function handle(req, res) {
   const url = new URL(req.url, "http://localhost");
   let pathname = url.pathname;
 
   if (pathname === "/") pathname = "/index.html";
+
+  if (pathname === "/__od/events") {
+    return handleSse(req, res);
+  }
 
   const designFinalize = pathname.match(/^\/data\/designs\/([^/]+)\/finalize$/);
   if (designFinalize && req.method === "POST") {

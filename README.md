@@ -28,7 +28,7 @@ This plugin ships through the `ac8318740-plugins` marketplace. After adding the 
    npx open-designer-viewer
    ```
 
-   It picks a free port, serves the viewer at `/`, exposes `.open-designer/` at `/data/`, and opens your browser. Override the port with `OPEN_DESIGNER_PORT=5200 npx open-designer-viewer`. Skip auto-open with `OPEN_DESIGNER_NO_OPEN=1 npx open-designer-viewer`.
+   It picks a free port, serves the viewer at `/`, exposes `.open-designer/` at `/data/`, and opens your browser. The viewer auto-refreshes when Claude edits files under `.open-designer/` – no manual reload. Override the port with `OPEN_DESIGNER_PORT=5200 npx open-designer-viewer`. Skip auto-open with `OPEN_DESIGNER_NO_OPEN=1 npx open-designer-viewer`.
 5. Click any element in any design. Type your intent. Hit copy. Paste into Claude Code. Claude edits the target design.
 6. In Design systems mode, tweak tokens and click Promote to write values back to `tokens.css`.
 
