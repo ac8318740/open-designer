@@ -1,0 +1,392 @@
+/*
+ * Canonical preview chrome for design-system preview cards.
+ *
+ * Injected into preview/*.html iframes by the viewer. The chrome is
+ * intentionally neutral (no token references) so every DS's preview
+ * cards share the same clean devtool look, while the swatches/demos
+ * still pull their colours from the DS's tokens.css.
+ *
+ * Stays light regardless of OS theme – that keeps dark token palettes
+ * from clashing with a dark chrome background, and lets swatches read
+ * cleanly against a neutral surface.
+ */
+
+:root {
+  --odp-bg: #fafafa;
+  --odp-surface: #ffffff;
+  --odp-border: #e5e7eb;
+  --odp-text: #111827;
+  --odp-text-muted: #6b7280;
+  --odp-text-faint: #9ca3af;
+  --odp-accent: #2563eb;
+  --odp-accent-text: #ffffff;
+  --odp-code-bg: #f3f4f6;
+  --odp-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.06);
+  color-scheme: light;
+}
+
+/* Sample shapes (radius tiles, motion box, spacing bars) use
+   `var(--odp-preview-accent, #64748b)` inline so each DS's preview HTML
+   can map it to their brand token:
+       :root { --odp-preview-accent: var(--<prefix>-bg-accent-primary); }
+   Defining the variable here in :root would lose the override because
+   the chrome is injected *after* the HTML's inline <style>; the
+   fallback-via-var() approach sidesteps the cascade ordering. */
+
+body {
+  margin: 0;
+  padding: 40px 48px 64px;
+  background: var(--odp-bg);
+  color: var(--odp-text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+code {
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  color: var(--odp-text);
+}
+
+/* Inline code inside the header paragraph reads busy with a background
+   treatment – keep it mono + subtly dimmed so references sit quietly
+   alongside prose. */
+.preview-header p code {
+  color: var(--odp-text-muted);
+  background: transparent;
+  padding: 0;
+}
+
+/* Header --------------------------------------------------------------- */
+
+.preview-header {
+  margin-bottom: 40px;
+}
+
+.preview-header h1 {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 10px;
+  color: var(--odp-text);
+}
+
+.preview-header p {
+  color: var(--odp-text-muted);
+  margin: 0 0 24px;
+  max-width: 68ch;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* Segmented pill control for the mode toggles. Generous gap + radius
+   so a row of four buttons reads as "clean and designy" rather than
+   a default HTML form control. */
+.mode-toggle {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--odp-surface);
+  border: 1px solid var(--odp-border);
+  border-radius: 10px;
+  box-shadow: var(--odp-shadow);
+}
+
+.mode-toggle button {
+  border: none;
+  background: transparent;
+  color: var(--odp-text-muted);
+  padding: 7px 14px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.mode-toggle button:hover {
+  color: var(--odp-text);
+  background: color-mix(in srgb, var(--odp-accent) 8%, transparent);
+}
+
+.mode-toggle button[aria-pressed="true"] {
+  background: var(--odp-accent);
+  color: var(--odp-accent-text);
+  font-weight: 600;
+}
+
+.mode-toggle button:focus-visible {
+  outline: 2px solid var(--odp-accent);
+  outline-offset: 2px;
+}
+
+/* Sections ------------------------------------------------------------- */
+
+/* A section is the visual card – rows share the card surface and split with
+   soft dividers. Avoids the "every row is its own bordered box" look and
+   gives token samples room to breathe. */
+.preview-section {
+  margin: 32px 0;
+  background: var(--odp-surface);
+  border: 1px solid var(--odp-border);
+  border-radius: 12px;
+  box-shadow: var(--odp-shadow);
+  overflow: hidden;
+}
+
+.preview-section h2 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  margin: 0;
+  padding: 16px 32px;
+  border-bottom: 1px solid var(--odp-border);
+  color: var(--odp-text);
+}
+
+/* Intro / caption paragraphs directly inside a section card (e.g. a short
+   note above a grid of tiles, or a footnote below a token card). Padded
+   symmetrically so the text sits balanced in its space regardless of
+   what comes before or after. */
+.preview-section > p {
+  margin: 0;
+  padding: 16px 32px;
+  color: var(--odp-text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.preview-section > p.warning {
+  color: #b45309;
+}
+
+/* Swatch grid. Sits inside a `.preview-section` card – the grid uses the
+   card's padding and no outer shadow of its own. */
+.swatch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+  padding: 20px 32px;
+}
+
+.swatch {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--odp-border);
+  background: var(--odp-bg);
+}
+
+.swatch-chip {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  border: 1px solid var(--odp-border);
+  flex-shrink: 0;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.swatch-meta {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.swatch-name {
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--odp-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.swatch-value {
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--odp-text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Token card row – used by type, spacing, radius, shadows, motion.
+   Rows live inside a `.preview-section` card; they are separated by soft
+   row dividers rather than having borders of their own. Two columns:
+   meta (name + size/line-height/weight) on the left, sample on the right
+   with space to breathe. */
+.token-card {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  grid-template-areas:
+    "name  demo"
+    "value demo";
+  align-items: center;
+  column-gap: 32px;
+  row-gap: 2px;
+  padding: 22px 32px;
+  border-bottom: 1px solid var(--odp-border);
+}
+
+.token-card .name  { grid-area: name; }
+.token-card .value { grid-area: value; }
+.token-card .demo  { grid-area: demo; align-self: center; }
+
+.token-card:last-child {
+  border-bottom: none;
+}
+
+.token-card .name {
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--odp-text);
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.token-card .value {
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--odp-text-faint);
+  line-height: 1.4;
+  margin-top: 3px;
+  display: block;
+}
+
+/* `.demo` is the sample. It sits in the right column – no extra margin,
+   layout handled by the grid. */
+.token-card .demo {
+  color: var(--odp-text);
+}
+
+/* Motion preview ------------------------------------------------------- */
+
+/* Motion tiles sit in their own responsive grid inside a section card. */
+.demo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 20px;
+  padding: 20px 32px;
+}
+
+.demo-item {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.demo-stage {
+  position: relative;
+  height: 120px;
+  background: var(--odp-bg);
+  border: 1px solid var(--odp-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+/* The animated element is shape-only – no text inside. The animation
+   token is what's on display; the readable label sits below the stage. */
+.demo-box {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+  background: var(--odp-preview-accent, #64748b);
+  border-radius: 8px;
+  box-shadow: var(--odp-shadow);
+}
+
+/* Static shape for radius / border-width samples. Each tile is the
+   demoed shape itself – callers override `border-radius` (radius page)
+   or `border` (border-width page) inline per cell. */
+.demo-tile {
+  width: 100%;
+  height: 96px;
+  background: var(--odp-preview-accent, #64748b);
+  box-shadow: var(--odp-shadow);
+}
+
+.demo-tile.circle {
+  width: 96px;
+  height: 96px;
+  margin: 0 auto;
+  border-radius: 9999px;
+}
+
+/* Spacing bar row: fixed-width token label, bar sized inline per cell,
+   fits inside the section card's padding so the bars never sit flush
+   against the card border. */
+.demo-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 32px;
+  border-bottom: 1px solid var(--odp-border);
+}
+
+.demo-row:last-child {
+  border-bottom: none;
+}
+
+.demo-row .token {
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--odp-text);
+  width: 120px;
+  flex-shrink: 0;
+}
+
+.demo-row .bar {
+  height: 16px;
+  background: var(--odp-preview-accent, #64748b);
+  border-radius: 2px;
+}
+
+.demo-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--odp-text);
+}
+
+.demo-meta {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 11px;
+  color: var(--odp-text-faint);
+}
+
+.replay {
+  background: transparent;
+  border: 1px solid var(--odp-border);
+  color: var(--odp-text-muted);
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 11px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.replay:hover {
+  border-color: var(--odp-accent);
+  color: var(--odp-accent);
+  background: color-mix(in srgb, var(--odp-accent) 6%, transparent);
+}
+
+.replay:focus-visible {
+  outline: 2px solid var(--odp-accent);
+  outline-offset: 2px;
+}

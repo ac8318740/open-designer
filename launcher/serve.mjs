@@ -5,10 +5,17 @@
 import { createServer } from "node:http";
 import { readFile, stat, readdir, writeFile, rename, unlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { extname, join, normalize, resolve, sep } from "node:path";
+import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import { applyFinalizeBody, applyPromoteBody, isValidDesignName } from "./finalize.mjs";
+import {
+  applyApprovalsBody,
+  applyFinalizeBody,
+  applyPromoteBody,
+  isValidDesignName,
+  safeJoin,
+  titlecaseId,
+} from "./finalize.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const PLUGIN_ROOT = resolve(__dirname, "..");
@@ -39,13 +46,6 @@ const MIME = {
   ".woff2": "font/woff2",
 };
 
-function safeJoin(root, relPath) {
-  const decoded = decodeURIComponent(relPath.replace(/\?.*$/, ""));
-  const joined = normalize(join(root, decoded));
-  if (!joined.startsWith(root + sep) && joined !== root) return null;
-  return joined;
-}
-
 async function serveFile(res, absPath) {
   try {
     const data = await readFile(absPath);
@@ -75,6 +75,107 @@ async function maybeServeDesignIndex(res, urlPath) {
   res.writeHead(200, { "Content-Type": MIME[".json"], "Cache-Control": "no-store" });
   res.end(JSON.stringify({ designs: names }));
   return true;
+}
+
+// Serve /data/design-systems/<ds>/preview/index.json. If the DS author has
+// written an index.json on disk (with tweaks + variants), return it verbatim.
+// Otherwise synthesize a zero-tweak listing from *.html files. Files whose
+// stem starts with `_` are skipped so shared partials like `_preview.css`
+// don't show up as selectable surfaces.
+async function maybeServePreviewIndex(res, urlPath) {
+  const m = urlPath.match(/^\/data\/design-systems\/([^/]+)\/preview\/index\.json$/);
+  if (!m) return false;
+  const dsName = decodeURIComponent(m[1]);
+  if (!isValidDesignName(dsName)) {
+    res.writeHead(400);
+    res.end("invalid ds name");
+    return true;
+  }
+  const dir = safeJoin(DATA_ROOT, `design-systems/${dsName}/preview`);
+  if (!dir || !existsSync(dir)) {
+    res.writeHead(200, { "Content-Type": MIME[".json"], "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ previews: [] }));
+    return true;
+  }
+  const authored = join(dir, "index.json");
+  if (existsSync(authored)) {
+    try {
+      const body = await readFile(authored, "utf8");
+      res.writeHead(200, { "Content-Type": MIME[".json"], "Cache-Control": "no-store" });
+      res.end(body);
+      return true;
+    } catch (err) {
+      console.warn(`Preview index read failed for ${dsName}: ${err.message}`);
+    }
+  }
+  const entries = await readdir(dir, { withFileTypes: true });
+  const previews = [];
+  for (const e of entries) {
+    if (!e.isFile()) continue;
+    if (!e.name.endsWith(".html")) continue;
+    const id = e.name.slice(0, -".html".length);
+    if (!id || id.startsWith("_")) continue;
+    previews.push({ id, label: titlecaseId(id), file: e.name });
+  }
+  previews.sort((a, b) => a.id.localeCompare(b.id));
+  res.writeHead(200, { "Content-Type": MIME[".json"], "Cache-Control": "no-store" });
+  res.end(JSON.stringify({ previews }));
+  return true;
+}
+
+// Serve /data/design-systems/<ds>/approvals.json, defaulting to an empty
+// object shape when the file doesn't exist yet.
+async function maybeServeApprovals(res, urlPath) {
+  const m = urlPath.match(/^\/data\/design-systems\/([^/]+)\/approvals\.json$/);
+  if (!m) return false;
+  const dsName = decodeURIComponent(m[1]);
+  if (!isValidDesignName(dsName)) {
+    res.writeHead(400);
+    res.end("invalid ds name");
+    return true;
+  }
+  const path = safeJoin(DATA_ROOT, `design-systems/${dsName}/approvals.json`);
+  if (!path) {
+    res.writeHead(403);
+    res.end("Forbidden");
+    return true;
+  }
+  res.writeHead(200, { "Content-Type": MIME[".json"], "Cache-Control": "no-store" });
+  if (existsSync(path)) {
+    res.end(await readFile(path, "utf8"));
+  } else {
+    res.end(JSON.stringify({ schemaVersion: 1, surfaces: {} }));
+  }
+  return true;
+}
+
+async function handleApprovals(req, res, dsName) {
+  if (!isValidDesignName(dsName)) {
+    res.writeHead(400);
+    return res.end("invalid ds name");
+  }
+  const path = safeJoin(DATA_ROOT, `design-systems/${dsName}/approvals.json`);
+  if (!path) {
+    res.writeHead(403);
+    return res.end("Forbidden");
+  }
+  try {
+    const body = JSON.parse((await readBody(req)) || "{}");
+    const current = existsSync(path)
+      ? JSON.parse(await readFile(path, "utf8"))
+      : { schemaVersion: 1, surfaces: {} };
+    const merged = applyApprovalsBody(current, body);
+    if (merged.error) {
+      res.writeHead(400);
+      return res.end(merged.error);
+    }
+    await atomicWrite(path, JSON.stringify(merged.approvals, null, 2));
+    res.writeHead(200, { "Content-Type": MIME[".json"] });
+    res.end(JSON.stringify({ ok: true, approvals: merged.approvals }));
+  } catch (err) {
+    res.writeHead(500);
+    res.end(`approvals failed: ${err.message}`);
+  }
 }
 
 // Synthesize /data/design-systems/index.json from the manifest of each DS.
@@ -114,9 +215,15 @@ async function maybeServeDsIndex(res, urlPath) {
 }
 
 async function readBody(req) {
-  const chunks = [];
-  for await (const c of req) chunks.push(c);
-  return Buffer.concat(chunks).toString("utf8");
+  try {
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    return Buffer.concat(chunks).toString("utf8");
+  } catch (err) {
+    // Client disconnects or aborts mid-POST surface here. Surface them to
+    // the caller as a normal error instead of an uncaught stream event.
+    throw new Error(`request body read failed: ${err.message}`);
+  }
 }
 
 // Atomic-write helper – write to `.tmp` then rename. Used by finalize + promote
@@ -226,8 +333,15 @@ async function handle(req, res) {
     return handlePromote(req, res, decodeURIComponent(dsPromote[1]));
   }
 
+  const dsApprovals = pathname.match(/^\/data\/design-systems\/([^/]+)\/approvals$/);
+  if (dsApprovals && req.method === "POST") {
+    return handleApprovals(req, res, decodeURIComponent(dsApprovals[1]));
+  }
+
   if (await maybeServeDesignIndex(res, pathname)) return;
   if (await maybeServeDsIndex(res, pathname)) return;
+  if (await maybeServePreviewIndex(res, pathname)) return;
+  if (await maybeServeApprovals(res, pathname)) return;
 
   if (pathname.startsWith("/data/")) {
     const rel = pathname.slice("/data/".length);

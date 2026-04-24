@@ -1,7 +1,10 @@
-import type { Tweak } from "./types";
+import type { TokensMap, Tweak, TweakTransform } from "./types";
 
 const STORAGE_PREFIX = "od:tweaks:";
 const PANEL_STATE_KEY = "od:panel-open";
+// ID of the injected <style> element that carries tweak CSS variable
+// overrides. Kept here so renames stay in one file.
+const TWEAKS_STYLE_ID = "od-tweaks-vars";
 
 export interface TweakBinding {
   tweaks: Tweak[];
@@ -120,26 +123,86 @@ export function cssValueFor(tweak: Tweak, raw: string): string {
   }
 }
 
+// Returns the list of CSS variables this tweak writes to. `target` + `targets`
+// are mutually exclusive; a tweak with neither is a declaration bug but we
+// tolerate it (empty list means no variables are emitted).
+export function resolvedTargets(tweak: Tweak): string[] {
+  if (Array.isArray(tweak.targets) && tweak.targets.length > 0) return tweak.targets;
+  if (tweak.target) return [tweak.target];
+  return [];
+}
+
+export function resolvedTransform(tweak: Tweak): TweakTransform {
+  const t = tweak.transform;
+  if (t === "add" || t === "scale") {
+    if (tweak.type !== "slider") {
+      // Non-slider types can't sensibly use add/scale. Warn once and treat as set.
+      console.warn(
+        `[od] tweak "${tweak.id}" uses transform "${t}" but type "${tweak.type}" is not slider – treating as "set".`,
+      );
+      return "set";
+    }
+    return t;
+  }
+  return "set";
+}
+
+// Extract the first number from a CSS value like "4px", "1.5rem", "0".
+// Returns null if no number is present (e.g. for color values).
+export function parseNumericToken(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const m = value.trim().match(/^(-?\d+(?:\.\d+)?)/);
+  if (!m) return null;
+  const n = parseFloat(m[1]);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Compute the CSS emission for a single (tweak, target) pair. Returns null
+// if the transform can't resolve (e.g. add/scale against a token missing
+// from tokensMap) – the caller should skip emitting that pair.
+export function emittedValueFor(
+  tweak: Tweak,
+  raw: string,
+  target: string,
+  tokensMap: TokensMap | null,
+): string | null {
+  const transform = resolvedTransform(tweak);
+  if (transform === "set") return cssValueFor(tweak, raw);
+  const base = parseNumericToken(tokensMap?.get(target));
+  if (base === null) return null;
+  const delta = parseFloat(raw);
+  if (!Number.isFinite(delta)) return null;
+  const unit = tweak.unit ?? "";
+  const next = transform === "add" ? base + delta : base * delta;
+  // Trim trailing zeros so 6.00 reads as 6 (keeps promote-prompt output tidy).
+  return `${+next.toFixed(4)}${unit}`;
+}
+
 export function applyTweaksToIframe(
   iframe: HTMLIFrameElement,
   tweaks: Tweak[],
   values: Record<string, string>,
+  tokensMap: TokensMap | null = null,
 ): void {
   const doc = iframe.contentDocument;
   if (!doc) return;
   const cssParts: string[] = [];
   for (const t of tweaks) {
-    const resolved = cssValueFor(t, values[t.id] ?? defaultFor(t));
+    const raw = values[t.id] ?? defaultFor(t);
     if (t.type === "state") {
-      doc.documentElement.setAttribute("data-state", resolved);
-    } else {
-      cssParts.push(`${t.target}: ${resolved};`);
+      doc.documentElement.setAttribute("data-state", cssValueFor(t, raw));
+      continue;
+    }
+    for (const target of resolvedTargets(t)) {
+      const emitted = emittedValueFor(t, raw, target, tokensMap);
+      if (emitted === null) continue;
+      cssParts.push(`${target}: ${emitted};`);
     }
   }
-  let style = doc.getElementById("od-tweaks-vars") as HTMLStyleElement | null;
+  let style = doc.getElementById(TWEAKS_STYLE_ID) as HTMLStyleElement | null;
   if (!style) {
     style = doc.createElement("style");
-    style.id = "od-tweaks-vars";
+    style.id = TWEAKS_STYLE_ID;
     doc.head.appendChild(style);
   }
   style.textContent = `:root { ${cssParts.join(" ")} }`;
@@ -161,6 +224,9 @@ export function renderTweaksPanel(args: {
   onClearChosen?: () => void;
   showPromote?: boolean;
   onPromote?: (tweak: Tweak) => void;
+  // DS-mode only: render a "Reset surface" row at the bottom of the body.
+  onResetSurface?: () => void;
+  resetLabel?: string;
 }): void {
   const {
     root,
@@ -178,6 +244,8 @@ export function renderTweaksPanel(args: {
     onClearChosen,
     showPromote,
     onPromote,
+    onResetSurface,
+    resetLabel,
   } = args;
   root.innerHTML = "";
 
@@ -250,6 +318,23 @@ export function renderTweaksPanel(args: {
 
     root.appendChild(actions);
   }
+
+  if (onResetSurface) {
+    // Always rendered when the caller wires a reset handler, even if the
+    // current state is in-sync. Visibility is toggled from elsewhere (sync
+    // recompute) via the `hidden` attribute, so tweak drags don't have to
+    // re-render the whole panel to keep this in lockstep with divergence.
+    const resetWrap = document.createElement("div");
+    resetWrap.className = "tweak-reset";
+    resetWrap.hidden = true;
+    const resetBtn = document.createElement("button");
+    resetBtn.type = "button";
+    resetBtn.className = "tweak-reset-btn";
+    resetBtn.textContent = resetLabel ?? "Reset surface";
+    resetBtn.addEventListener("click", () => onResetSurface());
+    resetWrap.appendChild(resetBtn);
+    root.appendChild(resetWrap);
+  }
 }
 
 function renderTweak(
@@ -270,11 +355,19 @@ function renderTweak(
   label.textContent = tweak.label;
   label.htmlFor = `tweak-${tweak.id}`;
   labelRow.appendChild(label);
-  if (opts.showPromote && opts.onPromote) {
+  // Only single-target / set tweaks have an unambiguous per-tweak promote
+  // target. Multi-target and add/scale tweaks route through the sync panel's
+  // Copy promote prompt instead.
+  const canPromoteInline =
+    !!opts.showPromote &&
+    !!opts.onPromote &&
+    !!tweak.target &&
+    (!tweak.transform || tweak.transform === "set");
+  if (canPromoteInline) {
     const promote = document.createElement("button");
     promote.type = "button";
     promote.className = "tweak-promote";
-    promote.textContent = "Promote";
+    promote.innerHTML = `<span aria-hidden="true">→</span> tokens.css`;
     promote.title = `Write this value into tokens.css at ${tweak.target}`;
     promote.addEventListener("click", () => opts.onPromote?.(tweak));
     labelRow.appendChild(promote);

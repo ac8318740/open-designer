@@ -4,6 +4,8 @@
 // Kept as plain .mjs so serve.mjs can import without a build step;
 // the vite middleware consumes it via allowJs.
 
+import { join, normalize, sep } from "node:path";
+
 /**
  * Validate a name from a URL path. Rejects anything that could escape the
  * parent directory – dot-dot segments, path separators, and any character
@@ -16,6 +18,27 @@ export function isValidDesignName(name) {
   if (typeof name !== "string" || name.length === 0) return false;
   if (name.includes("..")) return false;
   return /^[A-Za-z0-9._-]+$/.test(name);
+}
+
+/**
+ * Join a user-supplied relative path onto a trusted root, refusing anything
+ * that escapes the root. Accepts URL-encoded input; strips a trailing query.
+ * Returns the resolved absolute path, or null if unsafe.
+ *
+ * @param {string} root  Absolute root directory, no trailing separator.
+ * @param {string} relPath  Untrusted relative path (may be URL-encoded).
+ * @returns {string | null}
+ */
+export function safeJoin(root, relPath) {
+  let decoded;
+  try {
+    decoded = decodeURIComponent(relPath.replace(/\?.*$/, ""));
+  } catch {
+    return null;
+  }
+  const joined = normalize(join(root, decoded));
+  if (!joined.startsWith(root + sep) && joined !== root) return null;
+  return joined;
 }
 
 /**
@@ -263,4 +286,60 @@ export function applyPromoteBody(currentCss, body) {
   } catch (err) {
     return { error: (err instanceof Error ? err.message : String(err)) };
   }
+}
+
+// --- Surface approvals ----------------------------------------------------
+
+/**
+ * Apply an approvals POST body against the existing approvals state. Returns
+ * the merged approvals object on success, or an error message.
+ *
+ * Accepted body shapes:
+ *   { action: "set", surfaceKind: "page"|"preview", surfaceId, variantId?, tweaks? }
+ *   { action: "clear", surfaceKind: "page"|"preview", surfaceId }
+ *
+ * @param {unknown} current
+ * @param {Record<string, unknown>} body
+ * @returns {{ approvals?: { schemaVersion: number, surfaces: Record<string, unknown> }, error?: string }}
+ */
+export function applyApprovalsBody(current, body) {
+  const surfaces =
+    current && typeof current === "object" && /** @type {any} */ (current).surfaces
+      ? { .../** @type {Record<string, unknown>} */ (/** @type {any} */ (current).surfaces) }
+      : /** @type {Record<string, unknown>} */ ({});
+  const approvals = { schemaVersion: 1, surfaces };
+  const action = body?.action;
+  const kind = body?.surfaceKind;
+  const id = body?.surfaceId;
+  if (!id || typeof id !== "string") return { error: "missing surfaceId" };
+  if (kind !== "page" && kind !== "preview") return { error: "invalid surfaceKind" };
+  const key = `${kind === "page" ? "pages" : "tokens"}/${id}`;
+  if (action === "clear") {
+    delete approvals.surfaces[key];
+    return { approvals };
+  }
+  if (action === "set") {
+    approvals.surfaces[key] = {
+      variantId: body.variantId ?? null,
+      tweaks: body.tweaks ?? null,
+      approvedAt: new Date().toISOString(),
+    };
+    return { approvals };
+  }
+  return { error: "invalid action" };
+}
+
+/**
+ * Title-case a URL-safe id ("hero-card" -> "Hero Card"). Shared so the dev
+ * middleware and the prod launcher produce identical preview labels.
+ *
+ * @param {string} id
+ * @returns {string}
+ */
+export function titlecaseId(id) {
+  return id
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((p) => p[0].toUpperCase() + p.slice(1))
+    .join(" ");
 }

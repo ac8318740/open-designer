@@ -3,11 +3,22 @@
 // under `vite dev` and `node launcher/serve.mjs`.
 
 import { createReadStream, existsSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { extname, join, normalize, resolve, sep } from "node:path";
+import { extname, join, resolve } from "node:path";
 import type { Plugin } from "vite";
 // Shared with serve.mjs via a .mjs module + .d.ts sidecar (zero-dep launcher
-// can't consume TS). Single source of truth for finalize + promote merge logic.
-import { applyFinalizeBody, applyPromoteBody, isValidDesignName } from "../../launcher/finalize.mjs";
+// can't consume TS). Single source of truth for finalize + promote + approvals
+// merge logic, safeJoin path checks, and preview label titlecasing. The two
+// servers deliberately use different I/O styles – serve.mjs is async because
+// it owns the event loop, this middleware is sync+callbacks to stay out of
+// Vite's way – but any persistence or merge must go through finalize.mjs.
+import {
+  applyApprovalsBody,
+  applyFinalizeBody,
+  applyPromoteBody,
+  isValidDesignName,
+  safeJoin,
+  titlecaseId,
+} from "../../launcher/finalize.mjs";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -45,8 +56,8 @@ function handleFinalize(
     res.end("invalid design name");
     return;
   }
-  const indexPath = join(root, "designs", design, "index.json");
-  if (!indexPath.startsWith(join(root, "designs") + sep)) {
+  const indexPath = safeJoin(root, `designs/${design}/index.json`);
+  if (!indexPath) {
     res.statusCode = 403;
     res.end("forbidden");
     return;
@@ -83,6 +94,47 @@ function handleFinalize(
   });
 }
 
+function handleApprovals(
+  req: import("node:http").IncomingMessage,
+  res: import("node:http").ServerResponse,
+  root: string,
+  ds: string,
+): void {
+  if (!isValidDesignName(ds)) {
+    res.statusCode = 400;
+    res.end("invalid ds name");
+    return;
+  }
+  const path = safeJoin(root, `design-systems/${ds}/approvals.json`);
+  if (!path) {
+    res.statusCode = 403;
+    res.end("forbidden");
+    return;
+  }
+  const chunks: Buffer[] = [];
+  req.on("data", (c: Buffer) => chunks.push(c));
+  req.on("end", () => {
+    try {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+      const current = existsSync(path)
+        ? JSON.parse(readFileSync(path, "utf8"))
+        : { schemaVersion: 1, surfaces: {} };
+      const merged = applyApprovalsBody(current, body);
+      if (merged.error) {
+        res.statusCode = 400;
+        res.end(merged.error);
+        return;
+      }
+      atomicWriteSync(path, JSON.stringify(merged.approvals, null, 2));
+      res.setHeader("content-type", "application/json; charset=utf-8");
+      res.end(JSON.stringify({ ok: true, approvals: merged.approvals }));
+    } catch (err) {
+      res.statusCode = 500;
+      res.end(`approvals failed: ${(err as Error).message}`);
+    }
+  });
+}
+
 function handlePromote(
   req: import("node:http").IncomingMessage,
   res: import("node:http").ServerResponse,
@@ -94,9 +146,9 @@ function handlePromote(
     res.end("invalid ds name");
     return;
   }
-  const tokensPath = join(root, "design-systems", ds, "tokens.css");
-  const manifestPath = join(root, "design-systems", ds, "manifest.json");
-  if (!tokensPath.startsWith(join(root, "design-systems") + sep)) {
+  const tokensPath = safeJoin(root, `design-systems/${ds}/tokens.css`);
+  const manifestPath = safeJoin(root, `design-systems/${ds}/manifest.json`);
+  if (!tokensPath || !manifestPath) {
     res.statusCode = 403;
     res.end("forbidden");
     return;
@@ -174,6 +226,82 @@ export function dataServer(dataRoot: string): Plugin {
           return;
         }
 
+        // POST /design-systems/<name>/approvals
+        const dsApprovals = url.match(/^\/design-systems\/([^/]+)\/approvals$/);
+        if (dsApprovals && req.method === "POST") {
+          handleApprovals(req, res, root, decodeURIComponent(dsApprovals[1]));
+          return;
+        }
+
+        // GET /design-systems/<name>/approvals.json (default shape when missing)
+        const approvalsGet = url.match(/^\/design-systems\/([^/]+)\/approvals\.json$/);
+        if (approvalsGet && req.method !== "POST") {
+          const dsName = decodeURIComponent(approvalsGet[1]);
+          if (!isValidDesignName(dsName)) {
+            res.statusCode = 400;
+            res.end("invalid ds name");
+            return;
+          }
+          const path = safeJoin(root, `design-systems/${dsName}/approvals.json`);
+          if (!path) {
+            res.statusCode = 403;
+            res.end("forbidden");
+            return;
+          }
+          res.setHeader("content-type", MIME[".json"]);
+          res.setHeader("cache-control", "no-store");
+          if (existsSync(path)) {
+            res.end(readFileSync(path, "utf8"));
+          } else {
+            res.end(JSON.stringify({ schemaVersion: 1, surfaces: {} }));
+          }
+          return;
+        }
+
+        // GET /design-systems/<name>/preview/index.json (synthesized)
+        const previewIndex = url.match(/^\/design-systems\/([^/]+)\/preview\/index\.json$/);
+        if (previewIndex && req.method !== "POST") {
+          const dsName = decodeURIComponent(previewIndex[1]);
+          if (!isValidDesignName(dsName)) {
+            res.statusCode = 400;
+            res.end("invalid ds name");
+            return;
+          }
+          const dir = safeJoin(root, `design-systems/${dsName}/preview`);
+          if (!dir) {
+            res.statusCode = 403;
+            res.end("forbidden");
+            return;
+          }
+          res.setHeader("content-type", MIME[".json"]);
+          res.setHeader("cache-control", "no-store");
+          if (!existsSync(dir)) {
+            res.end(JSON.stringify({ previews: [] }));
+            return;
+          }
+          // Authored preview/index.json wins over synthesis.
+          const authored = join(dir, "index.json");
+          if (existsSync(authored)) {
+            try {
+              res.end(readFileSync(authored, "utf8"));
+              return;
+            } catch (err) {
+              console.warn(`Preview index read failed for ${dsName}: ${(err as Error).message}`);
+            }
+          }
+          const previews: Array<{ id: string; label: string; file: string }> = [];
+          for (const e of readdirSync(dir, { withFileTypes: true })) {
+            if (!e.isFile()) continue;
+            if (!e.name.endsWith(".html")) continue;
+            const id = e.name.slice(0, -".html".length);
+            if (!id || id.startsWith("_")) continue;
+            previews.push({ id, label: titlecaseId(id), file: e.name });
+          }
+          previews.sort((a, b) => a.id.localeCompare(b.id));
+          res.end(JSON.stringify({ previews }));
+          return;
+        }
+
         if (url === "/designs/" || url === "/designs/index.json") {
           const designsRoot = join(root, "designs");
           res.setHeader("content-type", MIME[".json"]);
@@ -218,9 +346,9 @@ export function dataServer(dataRoot: string): Plugin {
           return;
         }
 
-        const rel = decodeURIComponent(url.startsWith("/") ? url.slice(1) : url);
-        const abs = normalize(join(root, rel));
-        if (!abs.startsWith(root + sep) && abs !== root) {
+        const rel = url.startsWith("/") ? url.slice(1) : url;
+        const abs = safeJoin(root, rel);
+        if (!abs) {
           res.statusCode = 403;
           res.end("forbidden");
           return;

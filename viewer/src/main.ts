@@ -11,6 +11,7 @@ import {
   saveStoredValues,
 } from "./tweaks";
 import type {
+  Approvals,
   Chosen,
   ChosenPage,
   DesignEntry,
@@ -21,18 +22,42 @@ import type {
   LegacyChosen,
   NormalizedIndex,
   Page,
+  Surface,
+  SyncDivergence,
+  TokensMap,
   Tweak,
   VariantEntry,
   ViewerMode,
 } from "./types";
+import {
+  approvalKey,
+  computeDivergence,
+  loadApprovals,
+  lookupApproval,
+} from "./approvals";
+import { computeTokenDivergences, loadTokensMap } from "./token-sync";
+import { buildPromotePrompt } from "./sync-prompts";
+// Canonical preview chrome – injected into preview/*.html iframes so every
+// DS's token demo cards share the same clean devtool look. Swatches still
+// pull their colours from each DS's tokens.css, but the layout/typography
+// of the preview itself lives here in the viewer.
+// @ts-expect-error – Vite's `?raw` import returns a string at runtime.
+import PREVIEW_CHROME_CSS from "./preview-chrome.css?raw";
 
 const DATA_ROOT = "/data";
 const ACTIVE_DESIGN_KEY = "od:active-design";
 const ACTIVE_DS_KEY = "od:active-ds";
 const ACTIVE_MODE_KEY = "od:mode";
 const TWEAKS_CORNER_KEY = "od:tweaks-corner";
+const SYNC_CORNER_KEY = "od:sync-corner";
 type Corner = "br" | "bl" | "tr" | "tl";
 const CORNERS: Corner[] = ["br", "bl", "tr", "tl"];
+
+// Timing knobs, kept together so tuning doesn't hunt across the file.
+const DIVERGENCE_DEBOUNCE_MS = 100;
+const SYNC_RECOMPUTE_DEBOUNCE_MS = 100;
+const STYLESHEET_WAIT_MS = 300;
+const TOAST_VISIBLE_MS = 2200;
 
 interface NormalizedDesign {
   name: string;
@@ -46,6 +71,8 @@ interface NormalizedDS {
   name: string;
   manifest: DesignSystemManifest;
   pages: Page[];
+  surfaces: Surface[];
+  approvals: Approvals;
 }
 
 function getChosenForPage(design: NormalizedDesign | null, pageId: string | null | undefined): ChosenPage | undefined {
@@ -81,6 +108,20 @@ let activeDS: NormalizedDS | null = null;
 let activePage: Page | null = null;
 let activeVariant: VariantEntry | null = null;
 let tweakValues: Record<string, string> = {};
+// Tweak IDs the user has explicitly edited for the active variant. Seeded
+// from stored values on variant load so reloads preserve "touched" state.
+// Used by the sync panel to suppress phantom divergences for tweaks that
+// have no declared default and haven't been touched – the fallback value
+// (#000000 for color, min for slider) isn't a real comparison point.
+let touchedTweakIds: Set<string> = new Set();
+let divergence = false;
+let divergenceTimer: number | null = null;
+let tokensMap: TokensMap = new Map();
+let syncDivergences: SyncDivergence[] = [];
+// Key of the surface the user has dismissed the sync panel for this visit.
+// Cleared on surface change; × therefore hides for this visit only.
+let syncDismissedKey: string | null = null;
+const lastDotState = new Map<string, string>(); // surfaceKey -> "green"|"yellow"|""
 const pageHistory: Array<{ pageId: string; variantId: string }> = [];
 interface NavOpts { fade?: boolean }
 
@@ -90,7 +131,6 @@ const iframe = document.getElementById("draft-frame") as HTMLIFrameElement;
 const stage = document.getElementById("stage")!;
 const emptyState = document.getElementById("empty-state")!;
 const emptyStateDs = document.getElementById("empty-state-ds")!;
-const projectLabel = document.getElementById("project-label")!;
 const designSelect = document.getElementById("design-select") as HTMLSelectElement;
 const dsSelect = document.getElementById("ds-select") as HTMLSelectElement;
 const modeDesigns = document.getElementById("mode-designs") as HTMLButtonElement;
@@ -101,9 +141,18 @@ const pickerToggle = document.getElementById("picker-toggle") as HTMLButtonEleme
 const tweaksToggle = document.getElementById("tweaks-toggle") as HTMLButtonElement;
 const refreshBtn = document.getElementById("refresh-btn") as HTMLButtonElement;
 const fullscreenBtn = document.getElementById("fullscreen-btn") as HTMLButtonElement;
+const approveBtn = document.getElementById("approve-btn") as HTMLButtonElement;
+const resetBtn = document.getElementById("reset-btn") as HTMLButtonElement;
+const pageSelectCaption = document.getElementById("page-select-caption") as HTMLElement;
 const tweaksPanel = document.getElementById("tweaks-panel") as HTMLElement;
 const tweaksBody = document.getElementById("tweaks-body")!;
 const tweaksClose = document.getElementById("tweaks-close") as HTMLButtonElement;
+const syncPanel = document.getElementById("sync-panel") as HTMLElement;
+const syncSubtitle = document.getElementById("sync-subtitle") as HTMLElement;
+const syncList = document.getElementById("sync-list") as HTMLElement;
+const syncClose = document.getElementById("sync-close") as HTMLButtonElement;
+const syncResetBtn = document.getElementById("sync-reset-btn") as HTMLButtonElement;
+const syncPromoteBtn = document.getElementById("sync-promote-btn") as HTMLButtonElement;
 const composerRoot = document.getElementById("composer") as HTMLElement;
 const composerChips = document.getElementById("composer-chips")!;
 const composerInput = document.getElementById("composer-input") as HTMLTextAreaElement;
@@ -135,8 +184,13 @@ picker.onLimitExceeded(() =>
 pickerToggle.addEventListener("click", () => togglePicker());
 tweaksToggle.addEventListener("click", () => toggleTweaksPanel());
 tweaksClose.addEventListener("click", () => toggleTweaksPanel(false));
+syncClose.addEventListener("click", () => dismissSyncPanel());
+syncResetBtn.addEventListener("click", () => resetSurfaceToBaseline());
+syncPromoteBtn.addEventListener("click", () => copyPromotePrompt());
 refreshBtn.addEventListener("click", () => refresh());
 fullscreenBtn.addEventListener("click", () => enterFullscreen());
+approveBtn.addEventListener("click", () => approveCurrentSurface());
+resetBtn.addEventListener("click", () => resetToSnapshot());
 designSelect.addEventListener("change", () => selectDesign(designSelect.value));
 dsSelect.addEventListener("change", () => selectDS(dsSelect.value));
 modeDesigns.addEventListener("click", () => setMode("designs"));
@@ -190,8 +244,10 @@ const panelStartsOpen = isPanelOpen();
 tweaksPanel.hidden = !panelStartsOpen;
 tweaksToggle.setAttribute("aria-checked", String(panelStartsOpen));
 pickerToggle.setAttribute("aria-checked", "false");
-applyCorner(loadCorner());
-wirePanelDrag();
+applyCorner(tweaksPanel, loadCorner(TWEAKS_CORNER_KEY, "br"));
+applyCorner(syncPanel, loadCorner(SYNC_CORNER_KEY, "bl"));
+wirePanelDrag(tweaksPanel, TWEAKS_CORNER_KEY);
+wirePanelDrag(syncPanel, SYNC_CORNER_KEY);
 
 refresh().catch((err) => {
   console.error(err);
@@ -227,6 +283,10 @@ function activeVariantUrl(): string | null {
     return `/designs/${activeDesign.name}/${activeVariant.file}`;
   }
   if (mode === "design-systems" && activeDS) {
+    const surface = surfaceOf(activeDS, activePage?.id);
+    if (surface?.kind === "preview") {
+      return `/design-systems/${activeDS.name}/preview/${activeVariant.file}`;
+    }
     return `/design-systems/${activeDS.name}/pages/${activeVariant.file}`;
   }
   return null;
@@ -298,7 +358,11 @@ function setMode(next: ViewerMode): void {
   applyModeToDom();
   clearPageHistory();
   picker.clearAll();
-  // Refresh picks up the active design/DS for the new mode.
+  // Refresh picks up the active design/DS for the new mode. The flash-mask
+  // (fading class) is applied right before iframe.src changes in
+  // selectVariant, not here – keeping the old iframe visible during the
+  // fetch + parse work makes the transition feel snappy instead of
+  // lingering on a blank frame.
   refresh().catch((err) => {
     console.error(err);
     showEmpty();
@@ -310,6 +374,11 @@ function applyModeToDom(): void {
   modeDesignSystems.setAttribute("aria-selected", String(mode === "design-systems"));
   document.body.classList.toggle("mode-designs", mode === "designs");
   document.body.classList.toggle("mode-design-systems", mode === "design-systems");
+  pageSelectCaption.textContent = mode === "design-systems" ? "Surface" : "Page";
+  if (mode !== "design-systems") {
+    syncPanel.hidden = true;
+    syncDivergences = [];
+  }
 }
 
 function loadMode(): ViewerMode {
@@ -359,9 +428,11 @@ async function loadDesignSystems(): Promise<NormalizedDS[]> {
       const list = j.designSystems ?? [];
       for (const entry of list) {
         const name = entry.name;
-        const [manifestRes, pagesRes] = await Promise.all([
+        const [manifestRes, pagesRes, previewRes, approvals] = await Promise.all([
           fetch(`${DATA_ROOT}/design-systems/${name}/manifest.json`),
           fetch(`${DATA_ROOT}/design-systems/${name}/pages/index.json`),
+          fetch(`${DATA_ROOT}/design-systems/${name}/preview/index.json`),
+          loadApprovals(name),
         ]);
         if (!manifestRes.ok) continue;
         const manifest = (await manifestRes.json()) as DesignSystemManifest;
@@ -370,13 +441,82 @@ async function loadDesignSystems(): Promise<NormalizedDS[]> {
           const pj = (await pagesRes.json()) as DesignSystemIndexPages;
           pages = normalizeDSPages(pj);
         }
-        out.push({ name, manifest, pages });
+        interface PreviewEntry {
+          id: string;
+          label: string;
+          file: string;
+          tweaks?: Tweak[];
+          variants?: VariantEntry[];
+        }
+        let previews: PreviewEntry[] = [];
+        if (previewRes.ok) {
+          const pj = (await previewRes.json()) as { previews?: PreviewEntry[] };
+          previews = pj.previews ?? [];
+        }
+        const surfaces: Surface[] = [
+          ...pages.map((p) => ({
+            kind: "page" as const,
+            id: p.id,
+            label: p.label ?? p.id,
+            variants: p.variants,
+            tweaks: p.tweaks,
+          })),
+          ...previews.map((pv) => ({
+            kind: "preview" as const,
+            id: pv.id,
+            label: pv.label,
+            // Synthesize a single default variant when none authored, so the
+            // existing page/variant plumbing works unchanged.
+            variants:
+              Array.isArray(pv.variants) && pv.variants.length > 0
+                ? pv.variants
+                : [{ id: "01-default", file: pv.file, label: "Default" }],
+            file: pv.file,
+            tweaks: pv.tweaks,
+          })),
+        ];
+        out.push({ name, manifest, pages: dsSurfacesToPages(surfaces), surfaces, approvals });
       }
     }
   } catch (err) {
     console.warn("Failed to load design systems:", err);
   }
   return out;
+}
+
+// Render each surface as a Page so the existing page/variant plumbing (back
+// nav, storage keys, tweaks panel) works unchanged for previews too. Preview
+// surfaces may carry authored variants and tweaks from preview/index.json;
+// when they don't, loadDesignSystems synthesizes a single default variant.
+function dsSurfacesToPages(surfaces: Surface[]): Page[] {
+  return surfaces.map((s) => ({
+    id: s.id,
+    label: s.label,
+    tweaks: s.tweaks,
+    variants: s.variants,
+  }));
+}
+
+function surfaceOf(ds: NormalizedDS | null, pageId: string | null | undefined): Surface | undefined {
+  if (!ds || !pageId) return undefined;
+  return ds.surfaces.find((s) => s.id === pageId);
+}
+
+async function refreshTokensMap(): Promise<void> {
+  if (mode !== "design-systems" || !activeDS) {
+    tokensMap = new Map();
+    return;
+  }
+  const chain = resolveExtendsChain(activeDS.name).map((d) => d.name);
+  tokensMap = await loadTokensMap(chain);
+  // An empty map after a DS-mode refresh usually means every tokens.css fetch
+  // failed. Without a warning, divergence panels silently go green and users
+  // think everything matches.
+  if (tokensMap.size === 0 && chain.length > 0) {
+    console.warn(
+      `[od] tokensMap is empty for DS "${activeDS.name}" – tokens.css fetches may have failed. Sync + divergence checks will be inaccurate.`,
+    );
+  }
 }
 
 function resolveExtendsChain(dsName: string | undefined): NormalizedDS[] {
@@ -475,6 +615,7 @@ async function refresh(): Promise<void> {
       showEmpty();
       return;
     }
+    await refreshTokensMap();
     selectPage(page, { variantId: prevVariantId });
   }
 }
@@ -506,6 +647,7 @@ function selectDS(name: string): void {
     saveActiveDS(name);
     populateDsSelect();
     clearPageHistory();
+    syncDismissedKey = null;
     if (next.pages.length === 0) {
       showEmpty();
       return;
@@ -515,7 +657,13 @@ function selectDS(name: string): void {
       showEmpty();
       return;
     }
-    selectPage(page);
+    // Capture the target DS so a rapid re-select doesn't race: if the user
+    // swaps DS again before the tokens fetch resolves, skip selectPage so it
+    // doesn't compute divergences against a stale tokens map.
+    const targetDS = next;
+    refreshTokensMap().then(() => {
+      if (activeDS === targetDS) selectPage(page);
+    });
     return;
   }
   // In Designs mode, picking a DS assigns it to the active design for this
@@ -535,6 +683,10 @@ function selectPage(
 ): void {
   const ctx = mode === "designs" ? activeDesign : activeDS;
   if (!ctx) return;
+  // Reset dismissal on surface change so a re-visit re-shows the panel.
+  if (activePage?.id !== page.id) {
+    syncDismissedKey = null;
+  }
   activePage = page;
   const storageKey = mode === "designs" ? ctx.name : `ds:${ctx.name}`;
   saveActivePage(storageKey, page.id);
@@ -564,40 +716,70 @@ function selectVariant(variant: VariantEntry, opts: NavOpts = {}): void {
   const tweaks = collectTweaks(activeDesign?.index, activePage, variant);
   const stored = loadStoredValues(storageKey, activePage.id, variant.id);
   tweakValues = buildInitialValues(tweaks, stored);
+  touchedTweakIds = new Set(Object.keys(stored));
 
-  const ctxName = ctx.name;
-  const pageLabel = activePage.label ?? activePage.id;
-  const variantLabel = variant.label ?? variant.id;
-  const dsBit = mode === "designs" && activeDesign?.designSystem
-    ? ` · ${activeDesign.designSystem}`
-    : "";
-  projectLabel.textContent = `${ctxName} · ${pageLabel} · ${variantLabel}${dsBit}`;
-
-  const doFade = opts.fade ?? false;
-  if (doFade) iframe.classList.add("fading");
-
+  // Compute the target URL. If it matches the iframe's current src, the
+  // document is already loaded – assigning it would force Chrome to tear
+  // down and re-fetch the same page (300ms+ of black-iframe on localhost),
+  // which is exactly the flicker the mode toggle produces when you leave
+  // Designs empty and come back to a DS surface that was already visible.
+  let nextUrl: string | null = null;
   if (mode === "designs" && activeDesign) {
-    iframe.src = `${DATA_ROOT}/designs/${activeDesign.name}/${variant.file}`;
+    nextUrl = `${DATA_ROOT}/designs/${activeDesign.name}/${variant.file}`;
   } else if (mode === "design-systems" && activeDS) {
-    iframe.src = `${DATA_ROOT}/design-systems/${activeDS.name}/pages/${variant.file}`;
+    const surface = surfaceOf(activeDS, activePage?.id);
+    nextUrl =
+      surface?.kind === "preview"
+        ? `${DATA_ROOT}/design-systems/${activeDS.name}/preview/${variant.file}`
+        : `${DATA_ROOT}/design-systems/${activeDS.name}/pages/${variant.file}`;
   }
+  if (!nextUrl) return;
+
+  const resolvedNext = new URL(nextUrl, window.location.href).href;
+  if (iframe.src === resolvedNext && iframe.contentDocument) {
+    // Same document, no reload. Re-apply tweaks in case they changed and
+    // re-render the panel; skip the fade entirely.
+    picker.clearAll();
+    picker.attach(iframe);
+    applyTweaksToIframe(iframe, tweaks, tweakValues, tokensMap);
+    syncIframeBackground(iframe);
+    renderPanel();
+    return;
+  }
+
+  // Different URL – mask the brief white flash while the iframe swaps
+  // documents. Added synchronously with the src change so the old content
+  // stays visible for every other step (fetches, tweak recompute, etc.)
+  // and the hidden window is as short as possible.
+  iframe.classList.add("fading");
+  iframe.src = nextUrl;
   picker.clearAll();
 
   iframe.onload = () => {
     normalizeIframeLayout(iframe);
     injectTokensChain(iframe);
+    injectPreviewChrome(iframe);
     injectNavScript(iframe);
     picker.attach(iframe);
     if (picker.isEnabled()) {
       iframe.contentDocument?.body.classList.add("od-picker-on");
     }
     iframe.contentDocument?.addEventListener("keydown", handleHotkey, true);
-    applyTweaksToIframe(iframe, tweaks, tweakValues);
+    applyTweaksToIframe(iframe, tweaks, tweakValues, tokensMap);
     syncIframeBackground(iframe);
     renderPanel();
-    if (doFade) {
-      requestAnimationFrame(() => iframe.classList.remove("fading"));
-    }
+    // iframe.onload fires once the HTML + its own <link> stylesheets are
+    // loaded. The token <link>s we inject inside this handler fetch async,
+    // so revealing here would flash the un-tokenized doc before the tokens
+    // apply. Wait for every stylesheet in the doc to be .sheet-ready (a
+    // loaded stylesheet exposes a non-null CSSStyleSheet), with a safety
+    // cap so a 404'd link never traps the iframe invisible.
+    waitForStylesheets(iframe, STYLESHEET_WAIT_MS).then(() => {
+      requestAnimationFrame(() => {
+        syncIframeBackground(iframe);
+        iframe.classList.remove("fading");
+      });
+    });
   };
 }
 
@@ -644,6 +826,10 @@ function injectTokensChain(frame: HTMLIFrameElement): void {
   for (const el of Array.from(doc.querySelectorAll("link[data-od-tokens-link]"))) {
     el.remove();
   }
+  // Preview surfaces already <link> ../tokens.css – skip to avoid a duplicate fetch.
+  if (mode === "design-systems" && surfaceOf(activeDS, activePage?.id)?.kind === "preview") {
+    return;
+  }
   const dsName =
     mode === "designs"
       ? activeDesign?.designSystem
@@ -657,6 +843,56 @@ function injectTokensChain(frame: HTMLIFrameElement): void {
     link.href = `${DATA_ROOT}/design-systems/${ds.name}/tokens.css`;
     doc.head.prepend(link);
   }
+}
+
+// Appended (not prepended) so the canonical chrome wins over anything the
+// preview HTML might link locally – e.g. a lingering `_preview.css` from
+// an older DS scaffold.
+function injectPreviewChrome(frame: HTMLIFrameElement): void {
+  const doc = frame.contentDocument;
+  if (!doc) return;
+  if (mode !== "design-systems") return;
+  if (surfaceOf(activeDS, activePage?.id)?.kind !== "preview") return;
+  let style = doc.getElementById("od-preview-chrome") as HTMLStyleElement | null;
+  if (!style) {
+    style = doc.createElement("style");
+    style.id = "od-preview-chrome";
+    doc.head.appendChild(style);
+  }
+  style.textContent = PREVIEW_CHROME_CSS;
+}
+
+// Resolve once every <link rel="stylesheet"> in the iframe doc has applied
+// (`link.sheet` is non-null) or `maxMs` elapses. Covers the injected token
+// chain whose fetches race the onload-time reveal and cause a brief
+// un-tokenized flash otherwise. The deadline guarantees a reveal even if a
+// link 404s or hangs.
+function waitForStylesheets(frame: HTMLIFrameElement, maxMs: number): Promise<void> {
+  const doc = frame.contentDocument;
+  if (!doc) return Promise.resolve();
+  const links = Array.from(
+    doc.querySelectorAll('link[rel="stylesheet"]'),
+  ) as HTMLLinkElement[];
+  const pending = links.filter((l) => !l.sheet);
+  if (pending.length === 0) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    let remaining = pending.length;
+    const one = () => {
+      remaining--;
+      if (remaining <= 0) finish();
+    };
+    for (const l of pending) {
+      l.addEventListener("load", one, { once: true });
+      l.addEventListener("error", one, { once: true });
+    }
+    window.setTimeout(finish, maxMs);
+  });
 }
 
 function syncIframeBackground(frame: HTMLIFrameElement): void {
@@ -749,7 +985,7 @@ function handleFrameMessage(e: MessageEvent): void {
 
   pageHistory.push({ pageId: activePage.id, variantId: activeVariant.id });
   renderBackButton();
-  selectPage(next, { variantId: targetVariantId, fade: true });
+  selectPage(next, { variantId: targetVariantId });
 }
 
 function goBack(): void {
@@ -759,7 +995,7 @@ function goBack(): void {
   if (!prev || !ctx) return;
   const page = ctx.pages.find((p) => p.id === prev.pageId);
   if (!page) return;
-  selectPage(page, { variantId: prev.variantId, fade: true });
+  selectPage(page, { variantId: prev.variantId });
 }
 
 function renderBackButton(): void {
@@ -778,7 +1014,6 @@ function populateDesignSelect(): void {
     designSelect.appendChild(opt);
   }
   document.body.classList.toggle("no-designs", designs.length === 0);
-  document.body.classList.toggle("no-multi-design", designs.length < 2);
 }
 
 function populateDsSelect(): void {
@@ -801,6 +1036,19 @@ function populatePageSelect(): void {
   const ctx = activeContext();
   if (!ctx || !activePage) return;
   pageSelect.innerHTML = "";
+
+  if (mode === "design-systems" && activeDS) {
+    const pageSurfaces = activeDS.surfaces.filter((s) => s.kind === "page");
+    const previewSurfaces = activeDS.surfaces.filter((s) => s.kind === "preview");
+    if (pageSurfaces.length) {
+      pageSelect.appendChild(buildSurfaceGroup("Pages", pageSurfaces));
+    }
+    if (previewSurfaces.length) {
+      pageSelect.appendChild(buildSurfaceGroup("Tokens", previewSurfaces));
+    }
+    return;
+  }
+
   for (const p of ctx.pages) {
     const opt = document.createElement("option");
     opt.value = p.id;
@@ -810,7 +1058,44 @@ function populatePageSelect(): void {
     if (p.id === activePage.id) opt.selected = true;
     pageSelect.appendChild(opt);
   }
-  document.body.classList.toggle("no-multi-page", ctx.pages.length < 2);
+}
+
+function buildSurfaceGroup(label: string, surfaces: Surface[]): HTMLOptGroupElement {
+  const group = document.createElement("optgroup");
+  group.label = label;
+  for (const s of surfaces) {
+    const opt = document.createElement("option");
+    opt.value = s.id;
+    const state = dotForSurface(s);
+    opt.dataset.dot = state;
+    const prefix = state ? "● " : "";
+    opt.textContent = `${prefix}${s.label}`;
+    if (s.id === activePage?.id) opt.selected = true;
+    group.appendChild(opt);
+  }
+  return group;
+}
+
+// Returns the dot state for a surface: "approved" (green), "diverged"
+// (yellow – includes never-approved), or "" (mode not DS / no data).
+function dotForSurface(surface: Surface): string {
+  if (!activeDS) return "";
+  const snapshot = lookupApproval(activeDS.approvals, surface);
+  if (!snapshot) return "diverged";
+  if (surface.id === activePage?.id) {
+    return divergence ? "diverged" : "approved";
+  }
+  // For other surfaces, compare snapshot against storage-persisted state.
+  const kindKey = `ds:${activeDS.name}`;
+  const storedVariant =
+    loadActiveVariant(kindKey, surface.id) ?? surface.variants[0]?.id ?? null;
+  const storedTweaks = storedVariant
+    ? loadStoredValues(kindKey, surface.id, storedVariant)
+    : {};
+  const storedTouched = new Set(Object.keys(storedTweaks));
+  return computeDivergence(surface, storedVariant, storedTweaks, storedTouched, snapshot)
+    ? "diverged"
+    : "approved";
 }
 
 function hasAnyChosen(chosen: Chosen | undefined): boolean {
@@ -870,13 +1155,26 @@ function renderPanel(): void {
     values: tweakValues,
     onChange: (id, value) => {
       tweakValues[id] = value;
+      touchedTweakIds.add(id);
       const ctx = activeContext();
       const ctxName = mode === "designs" ? activeDesign?.name : activeDS ? `ds:${activeDS.name}` : "";
       if (ctxName && activePage && activeVariant) {
-        saveStoredValues(ctxName, activePage.id, activeVariant.id, tweakValues);
+        // Persist only the keys the user touched so stored state stays
+        // small and reloads reconstruct an accurate touched set from
+        // Object.keys(stored).
+        saveStoredValues(
+          ctxName,
+          activePage.id,
+          activeVariant.id,
+          filterToTouched(tweakValues, touchedTweakIds),
+        );
       }
-      applyTweaksToIframe(iframe, tweaks, tweakValues);
+      applyTweaksToIframe(iframe, tweaks, tweakValues, tokensMap);
       syncIframeBackground(iframe);
+      if (mode === "design-systems") {
+        scheduleDivergenceRecompute();
+        scheduleSyncRecompute();
+      }
       void ctx;
     },
     // Chosen + finalize only apply in designs mode.
@@ -889,9 +1187,13 @@ function renderPanel(): void {
     // Promote wiring for DS mode.
     showPromote: mode === "design-systems",
     onPromote: mode === "design-systems" ? (tweak) => promoteTweak(tweak) : undefined,
+    onResetSurface: mode === "design-systems" ? () => resetSurfaceToBaseline() : undefined,
+    resetLabel: `Reset entire ${activePage.label ?? activePage.id} surface`,
   });
   renderChosenPill();
   renderBackButton();
+  recomputeDivergence();
+  recomputeSyncDivergences();
   populatePageSelect();
 }
 
@@ -994,10 +1296,400 @@ function applyChosenResponse(res: { chosen: Chosen | null }): void {
   renderPanel();
 }
 
+// Approval flow ------------------------------------------------------------
+
+function currentSurface(): Surface | null {
+  if (mode !== "design-systems" || !activeDS || !activePage) return null;
+  return surfaceOf(activeDS, activePage.id) ?? null;
+}
+
+function currentSnapshot(): ReturnType<typeof lookupApproval> {
+  const surface = currentSurface();
+  if (!surface || !activeDS) return null;
+  return lookupApproval(activeDS.approvals, surface);
+}
+
+function recomputeDivergence(): void {
+  const surface = currentSurface();
+  if (!surface) {
+    setDivergence(false);
+    return;
+  }
+  const snapshot = currentSnapshot();
+  const variantId = activeVariant?.id ?? null;
+  setDivergence(computeDivergence(surface, variantId, tweakValues, touchedTweakIds, snapshot));
+}
+
+function scheduleDivergenceRecompute(): void {
+  if (divergenceTimer) window.clearTimeout(divergenceTimer);
+  divergenceTimer = window.setTimeout(() => {
+    divergenceTimer = null;
+    recomputeDivergence();
+  }, DIVERGENCE_DEBOUNCE_MS);
+}
+
+// Shared debounce so the sync-panel recompute runs alongside the approval
+// divergence recompute – same 100ms window, independent state.
+let syncRecomputeTimer: number | null = null;
+function scheduleSyncRecompute(): void {
+  if (syncRecomputeTimer) window.clearTimeout(syncRecomputeTimer);
+  syncRecomputeTimer = window.setTimeout(() => {
+    syncRecomputeTimer = null;
+    recomputeSyncDivergences();
+  }, SYNC_RECOMPUTE_DEBOUNCE_MS);
+}
+
+function setDivergence(next: boolean): void {
+  const changed = divergence !== next;
+  divergence = next;
+  document.body.classList.toggle("has-divergence", next);
+  renderApprovalButtons();
+  if (changed) refreshDotsIfChanged();
+}
+
+function renderApprovalButtons(): void {
+  const surface = currentSurface();
+  if (!surface) {
+    approveBtn.textContent = "Approve surface";
+    approveBtn.classList.remove("approved");
+    approveBtn.title = "Approve the current surface as-is";
+    return;
+  }
+  const approved = currentSnapshot() !== null && !divergence;
+  approveBtn.textContent = approved ? "Approved ✓" : "Approve surface";
+  approveBtn.classList.toggle("approved", approved);
+  approveBtn.title = approved
+    ? "Click to un-approve this surface"
+    : "Approve the current surface as-is";
+}
+
+function refreshDotsIfChanged(): void {
+  if (mode !== "design-systems" || !activeDS) {
+    lastDotState.clear();
+    return;
+  }
+  let changed = false;
+  for (const s of activeDS.surfaces) {
+    const key = approvalKey(s);
+    const next = dotForSurface(s);
+    if (lastDotState.get(key) !== next) {
+      lastDotState.set(key, next);
+      changed = true;
+    }
+  }
+  if (changed) populatePageSelect();
+}
+
+// Sync panel --------------------------------------------------------------
+
+function currentSurfaceKey(): string | null {
+  const surface = currentSurface();
+  if (!surface || !activeDS) return null;
+  return `${activeDS.name}:${approvalKey(surface)}`;
+}
+
+function collectActiveTweaks(): Tweak[] {
+  if (!activePage || !activeVariant) return [];
+  return collectTweaks(activeDesign?.index, activePage, activeVariant);
+}
+
+function recomputeSyncDivergences(): void {
+  if (mode !== "design-systems" || !activeDS || !activePage || !activeVariant) {
+    syncDivergences = [];
+    renderSyncPanel();
+    return;
+  }
+  const tweaks = collectActiveTweaks();
+  syncDivergences = computeTokenDivergences(tweaks, tweakValues, tokensMap, touchedTweakIds);
+  renderSyncPanel();
+}
+
+function renderSyncPanel(): void {
+  const surfaceKey = currentSurfaceKey();
+  const shouldShow =
+    mode === "design-systems" &&
+    !!surfaceKey &&
+    syncDivergences.length > 0 &&
+    syncDismissedKey !== surfaceKey;
+
+  // The tweaks-panel Reset row shares the sync-panel visibility signal.
+  // Toggle it here so every tweak-change (debounced sync recompute) keeps
+  // it in lockstep without re-rendering the tweaks body.
+  const tweakReset = tweaksBody.querySelector(".tweak-reset") as HTMLElement | null;
+  if (tweakReset) tweakReset.hidden = !canResetSurface();
+
+  if (!shouldShow) {
+    syncPanel.hidden = true;
+    return;
+  }
+  const total = syncDivergences.length;
+  const surfaceLabel = activePage?.label ?? activePage?.id ?? "surface";
+  const tweakPhrase = total === 1 ? "1 tweak" : `${total} tweaks`;
+  const tweakVerb = total === 1 ? "differs" : "differ";
+  const otherSurfaceCount = Math.max(0, (activeDS?.surfaces.length ?? 1) - 1);
+  const othersPhrase =
+    otherSurfaceCount === 0
+      ? "the design system's saved values"
+      : otherSurfaceCount === 1
+        ? "what the design system has saved for 1 other surface"
+        : `what the design system has saved for ${otherSurfaceCount} other surfaces`;
+  syncSubtitle.textContent = `${tweakPhrase} on ${surfaceLabel} ${tweakVerb} from ${othersPhrase}.`;
+
+  syncList.innerHTML = "";
+  for (const div of syncDivergences) {
+    syncList.appendChild(renderSyncRow(div));
+  }
+  syncResetBtn.textContent = `Reset entire ${surfaceLabel} surface`;
+  syncResetBtn.hidden = !canResetSurface();
+  syncPanel.hidden = false;
+}
+
+function renderSyncRow(div: SyncDivergence): HTMLLIElement {
+  const li = document.createElement("li");
+  li.className = "sync-row";
+
+  const head = document.createElement("div");
+  head.className = "sync-row-head";
+  const label = document.createElement("span");
+  label.className = "sync-row-label";
+  label.textContent = div.tweakLabel;
+  head.appendChild(label);
+  const chip = document.createElement("span");
+  chip.className = "sync-row-chip";
+  chip.textContent = summariseTransform(div);
+  head.appendChild(chip);
+  li.appendChild(head);
+
+  const targets = document.createElement("div");
+  targets.className = "sync-row-targets";
+  for (const row of div.rows) {
+    const line = document.createElement("div");
+    line.className = "sync-target";
+    const name = document.createElement("span");
+    name.className = "sync-target-name";
+    name.textContent = row.target;
+    line.appendChild(name);
+
+    if (isColorValue(row.tokensValue) || isColorValue(row.currentValue)) {
+      const prevSwatch = swatch(row.tokensValue);
+      if (prevSwatch) line.appendChild(prevSwatch);
+    }
+    const before = document.createElement("span");
+    before.textContent = row.tokensValue ?? "(undeclared)";
+    line.appendChild(before);
+    const arrow = document.createElement("span");
+    arrow.className = "sync-target-arrow";
+    arrow.textContent = "→";
+    line.appendChild(arrow);
+    if (isColorValue(row.currentValue)) {
+      const nowSwatch = swatch(row.currentValue);
+      if (nowSwatch) line.appendChild(nowSwatch);
+    }
+    const after = document.createElement("span");
+    after.className = "sync-target-now";
+    after.textContent = row.currentValue;
+    line.appendChild(after);
+    targets.appendChild(line);
+  }
+  li.appendChild(targets);
+  return li;
+}
+
+function summariseTransform(div: SyncDivergence): string {
+  const n = div.rows.length;
+  const targetBit = n === 1 ? "1 target" : `${n} targets`;
+  if (div.transform === "add") {
+    const scalar = div.scalar ?? "0";
+    const sign = parseFloat(scalar) >= 0 ? "+" : "";
+    return `add ${sign}${scalar}${div.unit ?? ""} to ${targetBit}`;
+  }
+  if (div.transform === "scale") {
+    return `scale ×${div.scalar ?? "1"} across ${targetBit}`;
+  }
+  return `set across ${targetBit}`;
+}
+
+function isColorValue(v: string | null | undefined): boolean {
+  if (!v) return false;
+  const s = v.trim().toLowerCase();
+  // Require the opening paren so a token whose name happens to start with
+  // "rgb"/"hsl"/etc can't be misread as a color function.
+  return /^#[0-9a-f]{3,8}$/.test(s) || /^(rgb|rgba|hsl|hsla|oklch|oklab)\s*\(/.test(s);
+}
+
+function swatch(value: string | null): HTMLElement | null {
+  if (!value) return null;
+  const el = document.createElement("span");
+  el.className = "sync-swatch";
+  el.style.background = value;
+  return el;
+}
+
+function dismissSyncPanel(): void {
+  syncDismissedKey = currentSurfaceKey();
+  syncPanel.hidden = true;
+}
+
+function copyPromotePrompt(): void {
+  if (!activeDS || !activePage || syncDivergences.length === 0) return;
+  const surface = currentSurface();
+  if (!surface) return;
+  const previewFile = surface.file || `${surface.id}.html`;
+  const pageFile = activeVariant?.file || `${surface.id}.html`;
+  const surfacePath =
+    surface.kind === "preview" ? `preview/${previewFile}` : `pages/${pageFile}`;
+  const surfaceLabel =
+    surface.kind === "preview"
+      ? `Tokens · ${surface.label}`
+      : `Pages · ${surface.label}`;
+  const ctx = { dsName: activeDS.name, surfaceLabel, surfacePath };
+  const text = buildPromotePrompt(ctx, syncDivergences);
+  navigator.clipboard
+    .writeText(text)
+    .then(() => {
+      showToast(`Copied prompt to update the design system – paste into Claude Code.`);
+      dismissSyncPanel();
+    })
+    .catch(() => showToast("Clipboard blocked – select the text and copy manually."));
+}
+
+// Mirrors the sync-panel visibility condition: Reset surfaces whenever the
+// surface is out of sync with tokens.css. Tied to the same signal so the
+// tweaks-panel Reset and the sync-panel Reset toggle together.
+function canResetSurface(): boolean {
+  if (mode !== "design-systems" || !activeDS || !activePage || !activeVariant) return false;
+  return syncDivergences.length > 0;
+}
+
+// Reset tweak values + variant back to the last-approved snapshot for this
+// surface, or to the tweak schema defaults if no snapshot exists. Purely
+// local – writes to storage, applies to the iframe, recomputes divergences.
+function resetSurfaceToBaseline(): void {
+  if (mode !== "design-systems" || !activeDS || !activePage || !activeVariant) return;
+  const surface = currentSurface();
+  if (!surface) return;
+  const ctxName = `ds:${activeDS.name}`;
+  const snapshot = currentSnapshot();
+  let targetVariant: VariantEntry | null = activeVariant;
+  if (snapshot && snapshot.variantId) {
+    const match = activePage.variants.find((v) => v.id === snapshot.variantId);
+    if (match) targetVariant = match;
+  }
+  // Variant may have changed – re-compute tweak chain against the target variant.
+  const tweaks = collectTweaks(activeDesign?.index, activePage, targetVariant!);
+  const nextValues = snapshot?.tweaks
+    ? { ...snapshot.tweaks }
+    : buildInitialValues(tweaks, {});
+
+  // When resetting to schema defaults, persist an empty map so the surface
+  // returns to a pristine "untouched" state. Saving the expanded fallback
+  // values would mark every tweak as touched and resurface phantom
+  // divergences on tweaks that declare no `default`.
+  const storedValues = snapshot?.tweaks ? { ...snapshot.tweaks } : {};
+
+  // Hand off: if the target variant differs from the active one, use the
+  // normal selectVariant path so the iframe reloads too.
+  if (targetVariant!.id !== activeVariant.id) {
+    saveStoredValues(ctxName, activePage.id, targetVariant!.id, storedValues);
+    selectVariant(targetVariant!);
+    showToast(snapshot ? "Reset to approved snapshot." : "Reset to schema defaults.");
+    return;
+  }
+  tweakValues = nextValues;
+  touchedTweakIds = new Set(Object.keys(storedValues));
+  saveStoredValues(ctxName, activePage.id, activeVariant.id, storedValues);
+  applyTweaksToIframe(iframe, tweaks, tweakValues, tokensMap);
+  syncIframeBackground(iframe);
+  renderPanel();
+  showToast(snapshot ? "Reset to approved snapshot." : "Reset to schema defaults.");
+}
+
+async function approveCurrentSurface(): Promise<void> {
+  if (mode !== "design-systems" || !activeDS || !activePage) return;
+  const surface = currentSurface();
+  if (!surface) return;
+  const isApproved = currentSnapshot() !== null && !divergence;
+  const body = isApproved
+    ? {
+        action: "clear",
+        surfaceKind: surface.kind,
+        surfaceId: surface.id,
+      }
+    : {
+        action: "set",
+        surfaceKind: surface.kind,
+        surfaceId: surface.id,
+        variantId: activeVariant?.id ?? null,
+        // Only persist tweaks the user actually touched – untouched tweaks
+        // expand to fallback defaults (e.g. "#000000" for colors) that would
+        // pollute approvals.json and break divergence checks if defaults
+        // ever change.
+        tweaks: filterToTouched(tweakValues, touchedTweakIds),
+      };
+  try {
+    const r = await fetch(`${DATA_ROOT}/design-systems/${activeDS.name}/approvals`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const res = (await r.json()) as { ok: boolean; approvals: Approvals };
+    if (!res || typeof res !== "object" || !res.approvals || typeof res.approvals.surfaces !== "object") {
+      throw new Error("approvals response missing surfaces map");
+    }
+    activeDS.approvals = res.approvals;
+    recomputeDivergence();
+    populatePageSelect();
+    showToast(isApproved ? `Un-approved ${surface.label}.` : `Approved ${surface.label}.`);
+  } catch (err) {
+    console.error(err);
+    showToast(`${isApproved ? "Un-approve" : "Approve"} failed: ${(err as Error).message}`);
+  }
+}
+
+function resetToSnapshot(): void {
+  const surface = currentSurface();
+  const snapshot = currentSnapshot();
+  if (!surface || !snapshot || !activeDS || !activePage || !activeVariant) return;
+  const ctxName = `ds:${activeDS.name}`;
+  const snapshotTweaks = snapshot.tweaks ?? {};
+  const tweaks = collectTweaks(activeDesign?.index, activePage, activeVariant);
+  // Snapshots only store touched tweaks, so rebuild a full value map by
+  // filling defaults for tweaks the snapshot omits.
+  tweakValues = buildInitialValues(tweaks, snapshotTweaks);
+  touchedTweakIds = new Set(Object.keys(snapshotTweaks));
+  saveStoredValues(ctxName, activePage.id, activeVariant.id, snapshotTweaks);
+  applyTweaksToIframe(iframe, tweaks, tweakValues, tokensMap);
+  syncIframeBackground(iframe);
+  renderPanel();
+  recomputeDivergence();
+  recomputeSyncDivergences();
+}
+
+// Return only the keys the user has actually touched – used when sending
+// snapshots to approvals.json so we don't persist fallback defaults.
+function filterToTouched(
+  values: Record<string, string>,
+  touched: ReadonlySet<string>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const id of touched) {
+    if (id in values) out[id] = values[id];
+  }
+  return out;
+}
+
 async function promoteTweak(tweak: Tweak): Promise<void> {
   if (!activeDS) return;
   const value = tweakValues[tweak.id];
   if (value === undefined) return;
+  // Single-target + set is the fast path. Multi-target / transform tweaks
+  // are ambiguous for a single POST – the sync panel's Copy promote prompt
+  // handles those.
+  if (!tweak.target || (tweak.transform && tweak.transform !== "set")) {
+    showToast("Use the sync panel's Copy promote prompt for multi-target or transform tweaks.");
+    return;
+  }
   try {
     const r = await fetch(`${DATA_ROOT}/design-systems/${activeDS.name}/promote`, {
       method: "POST",
@@ -1006,6 +1698,8 @@ async function promoteTweak(tweak: Tweak): Promise<void> {
     });
     if (!r.ok) throw new Error(await r.text());
     showToast(`Promoted ${tweak.target} → tokens.css.`);
+    await refreshTokensMap();
+    recomputeSyncDivergences();
   } catch (err) {
     console.error(err);
     showToast(`Promote failed: ${(err as Error).message}`);
@@ -1060,14 +1754,14 @@ function onCopy(prompt: string): void {
 
 function showEmpty(): void {
   iframe.hidden = true;
+  // Clear any pending fade so a later content-bearing refresh isn't stuck invisible.
+  iframe.classList.remove("fading");
   if (mode === "designs") {
     emptyState.hidden = false;
     emptyStateDs.hidden = true;
-    projectLabel.textContent = "0 designs";
   } else {
     emptyState.hidden = true;
     emptyStateDs.hidden = false;
-    projectLabel.textContent = "0 design systems";
   }
   activeDesign = null;
   activeDS = null;
@@ -1078,33 +1772,33 @@ function showEmpty(): void {
   document.body.classList.add("no-drafts");
 }
 
-// Tweaks panel drag ---------------------------------------------------------
+// Panel drag (shared by tweaks + sync) --------------------------------------
 
-function loadCorner(): Corner {
+function loadCorner(storageKey: string, fallback: Corner): Corner {
   try {
-    const raw = localStorage.getItem(TWEAKS_CORNER_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (raw && (CORNERS as string[]).includes(raw)) return raw as Corner;
   } catch {
     /* ignore */
   }
-  return "br";
+  return fallback;
 }
 
-function saveCorner(c: Corner): void {
+function saveCorner(storageKey: string, c: Corner): void {
   try {
-    localStorage.setItem(TWEAKS_CORNER_KEY, c);
+    localStorage.setItem(storageKey, c);
   } catch {
     /* ignore */
   }
 }
 
-function applyCorner(corner: Corner): void {
-  for (const c of CORNERS) tweaksPanel.classList.remove(`corner-${c}`);
-  tweaksPanel.classList.add(`corner-${corner}`);
+function applyCorner(panel: HTMLElement, corner: Corner): void {
+  for (const c of CORNERS) panel.classList.remove(`corner-${c}`);
+  panel.classList.add(`corner-${corner}`);
 }
 
-function wirePanelDrag(): void {
-  const header = tweaksPanel.querySelector("header") as HTMLElement | null;
+function wirePanelDrag(panel: HTMLElement, storageKey: string): void {
+  const header = panel.querySelector("header") as HTMLElement | null;
   if (!header) return;
 
   let startX = 0;
@@ -1112,13 +1806,15 @@ function wirePanelDrag(): void {
   let dragging = false;
 
   header.addEventListener("pointerdown", (e) => {
-    if ((e.target as HTMLElement).closest("#tweaks-close")) return;
+    // Don't hijack clicks on the close button (×) or any control.
+    const tgt = e.target as HTMLElement;
+    if (tgt.closest("button")) return;
     if (e.button !== 0) return;
     dragging = true;
     startX = e.clientX;
     startY = e.clientY;
     header.setPointerCapture(e.pointerId);
-    tweaksPanel.classList.add("dragging");
+    panel.classList.add("dragging");
     e.preventDefault();
   });
 
@@ -1126,7 +1822,7 @@ function wirePanelDrag(): void {
     if (!dragging) return;
     const dx = e.clientX - startX;
     const dy = e.clientY - startY;
-    tweaksPanel.style.transform = `translate(${dx}px, ${dy}px)`;
+    panel.style.transform = `translate(${dx}px, ${dy}px)`;
   });
 
   const end = (e: PointerEvent) => {
@@ -1134,25 +1830,25 @@ function wirePanelDrag(): void {
     dragging = false;
     if (header.hasPointerCapture(e.pointerId)) header.releasePointerCapture(e.pointerId);
 
-    const prevRect = tweaksPanel.getBoundingClientRect();
+    const prevRect = panel.getBoundingClientRect();
     const centerX = prevRect.left + prevRect.width / 2;
     const centerY = prevRect.top + prevRect.height / 2;
     const isLeft = centerX < window.innerWidth / 2;
     const isTop = centerY < window.innerHeight / 2;
     const next: Corner = `${isTop ? "t" : "b"}${isLeft ? "l" : "r"}` as Corner;
 
-    tweaksPanel.style.transform = "";
-    applyCorner(next);
-    const newRect = tweaksPanel.getBoundingClientRect();
+    panel.style.transform = "";
+    applyCorner(panel, next);
+    const newRect = panel.getBoundingClientRect();
     const deltaX = prevRect.left - newRect.left;
     const deltaY = prevRect.top - newRect.top;
 
-    tweaksPanel.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
-    void tweaksPanel.offsetWidth;
+    panel.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
+    void panel.offsetWidth;
 
-    tweaksPanel.classList.remove("dragging");
-    tweaksPanel.style.transform = "";
-    saveCorner(next);
+    panel.classList.remove("dragging");
+    panel.style.transform = "";
+    saveCorner(storageKey, next);
   };
 
   header.addEventListener("pointerup", end);
@@ -1174,5 +1870,5 @@ function showToast(message: string): void {
   toast.textContent = message;
   toast.classList.add("visible");
   if (toastTimer) window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => toast?.classList.remove("visible"), 2200);
+  toastTimer = window.setTimeout(() => toast?.classList.remove("visible"), TOAST_VISIBLE_MS);
 }

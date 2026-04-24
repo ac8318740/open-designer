@@ -99,6 +99,7 @@ body {
    viewport. Exits on Escape (handled in main.ts). */
 body.fullscreen-mode #app-header,
 body.fullscreen-mode #tweaks-panel,
+body.fullscreen-mode #sync-panel,
 body.fullscreen-mode #composer {
   display: none !important;
 }
@@ -137,6 +138,23 @@ body.fullscreen-mode #stage {
   cursor: pointer;
 }
 
+/* Surface dots. The option text is `● label`; we tint via option color so
+   approved surfaces read green and diverged ones amber. Chromium honors
+   option color; other browsers fall back to the default text colour, which
+   still leaves the bullet as a visual cue. Option font-size is bumped a
+   touch so the `●` glyph reads a bit larger than the 12px base. */
+#page-select option[data-dot] {
+  font-size: 14px;
+}
+
+#page-select option[data-dot="approved"] {
+  color: #4ade80;
+}
+
+#page-select option[data-dot="diverged"] {
+  color: #fbbf24;
+}
+
 #design-select:hover,
 #page-select:hover,
 #ds-select:hover {
@@ -159,19 +177,40 @@ body.fullscreen-mode #stage {
   line-height: 1;
 }
 
-body.no-multi-design #design-select-group {
-  display: none;
-}
-
 body.mode-design-systems #design-select-group {
   display: none;
 }
 
-body.no-ds #ds-select-group {
+/* Approval buttons (DS mode only). Reset only appears when the active
+   surface has diverged from its approved snapshot. */
+#approve-btn,
+#reset-btn {
   display: none;
+  padding: 5px 10px;
+  font-size: 12px;
+  line-height: 1;
 }
 
-body.no-multi-page #page-select-group {
+body.mode-design-systems #approve-btn {
+  display: inline-flex;
+}
+
+body.mode-design-systems.has-divergence #reset-btn {
+  display: inline-flex;
+}
+
+#approve-btn.approved {
+  background: #1a7a3a;
+  border-color: #1a7a3a;
+  color: #e4ffef;
+}
+
+#approve-btn.approved:hover {
+  filter: brightness(1.05);
+  color: #e4ffef;
+}
+
+body.no-ds #ds-select-group {
   display: none;
 }
 
@@ -331,11 +370,15 @@ button[role="switch"]:focus-visible .switch-track {
      the scrollbar gutter blends in. Keeping the fallback dark means a
      load error or 404 blends with the chrome rather than flashing white. */
   background: var(--bg);
-  transition: opacity 150ms ease-out;
+  transition: opacity 60ms ease-out;
 }
 
 #draft-frame.fading {
   opacity: 0;
+  /* Drop the transition for the fade-out half so the mask is instant –
+     only the fade-in back to opacity 1 animates. This hides the iframe
+     document swap without adding perceivable latency. */
+  transition: none;
 }
 
 #stage.has-composer #draft-frame {
@@ -415,12 +458,15 @@ button[role="switch"]:focus-visible .switch-track {
 /* When there are no drafts, the picker + tweaks controls are meaningless.
    Hide them so the empty-state onboarding has the stage to itself. */
 body.no-drafts #tweaks-panel,
+body.no-drafts #sync-panel,
 body.no-drafts #picker-toggle,
 body.no-drafts #tweaks-toggle,
 body.no-drafts #design-select-group,
 body.no-drafts #ds-select-group,
 body.no-drafts #page-select-group,
-body.no-drafts #back-btn {
+body.no-drafts #back-btn,
+body.no-drafts #approve-btn,
+body.no-drafts #reset-btn {
   display: none !important;
 }
 
@@ -538,8 +584,14 @@ body.no-drafts #back-btn {
   color: var(--muted);
   border: 1px solid var(--border);
   background: transparent;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tweak-promote span {
+  opacity: 0.7;
 }
 
 .tweak-promote:hover {
@@ -633,6 +685,24 @@ body.no-drafts #back-btn {
 
 .tweak-finalize-all {
   font-size: 12px;
+}
+
+.tweak-reset {
+  padding-top: 12px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.tweak-reset-btn {
+  width: 100%;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tweak-reset-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 #chosen-pill {
@@ -778,6 +848,189 @@ body.no-drafts #back-btn {
   display: flex;
   gap: 6px;
   justify-content: flex-end;
+}
+
+/* Sync panel -------------------------------------------------------------- */
+
+#sync-panel {
+  position: fixed;
+  width: 360px;
+  max-height: calc(100vh - var(--header-h) - 32px);
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  z-index: 16;
+  overflow: hidden;
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+#sync-panel.corner-br {
+  right: 16px;
+  bottom: 16px;
+  top: auto;
+  left: auto;
+}
+#sync-panel.corner-bl {
+  left: 16px;
+  bottom: 16px;
+  top: auto;
+  right: auto;
+}
+#sync-panel.corner-tr {
+  right: 16px;
+  top: calc(var(--header-h) + 16px);
+  bottom: auto;
+  left: auto;
+}
+#sync-panel.corner-tl {
+  left: 16px;
+  top: calc(var(--header-h) + 16px);
+  bottom: auto;
+  right: auto;
+}
+
+#sync-panel.dragging {
+  transition: none;
+  user-select: none;
+}
+
+#sync-panel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: grab;
+  touch-action: none;
+}
+
+#sync-panel.dragging > header {
+  cursor: grabbing;
+}
+
+#sync-panel .panel-title {
+  color: var(--accent);
+}
+
+#sync-panel .panel-close {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+}
+
+#sync-panel .panel-close:hover {
+  color: var(--accent);
+}
+
+#sync-panel .panel-subtitle {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 10px 14px 0 14px;
+}
+
+.sync-list {
+  list-style: none;
+  margin: 8px 0 0 0;
+  padding: 4px 14px 12px 14px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sync-row {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sync-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.sync-row-label {
+  font-weight: 600;
+}
+
+.sync-row-chip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
+.sync-row-targets {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sync-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.sync-target-name {
+  color: var(--text);
+}
+
+.sync-target-arrow {
+  color: var(--muted);
+}
+
+.sync-target-now {
+  color: var(--accent);
+}
+
+.sync-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  flex: 0 0 auto;
+  vertical-align: middle;
+}
+
+#sync-panel .panel-actions {
+  display: flex;
+  gap: 6px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+
+#sync-panel .panel-actions button {
+  flex: 1;
+  justify-content: center;
+  font-size: 12px;
+  padding: 6px 8px;
 }
 
 /* Toast ------------------------------------------------------------------- */

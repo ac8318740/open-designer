@@ -10,7 +10,6 @@
     <header id="app-header">
       <div class="brand-group">
         <div class="brand">open-designer</div>
-        <span id="project-label" class="with-left-divider"></span>
         <div class="mode-toggle with-left-divider" id="mode-toggle" role="tablist" aria-label="Viewer mode">
           <button id="mode-design-systems" type="button" role="tab" aria-selected="false" data-mode="design-systems">Design systems</button>
           <button id="mode-designs" type="button" role="tab" aria-selected="true" data-mode="designs">Designs</button>
@@ -27,9 +26,11 @@
       <div class="meta">
         <button id="back-btn" type="button" title="Back to previous page" hidden>← Back</button>
         <div class="select-with-caption" id="page-select-group">
-          <span class="select-caption" aria-hidden="true">Page</span>
+          <span class="select-caption" id="page-select-caption" aria-hidden="true">Page</span>
           <select id="page-select" title="Switch page" aria-label="Page"></select>
         </div>
+        <button id="approve-btn" type="button" title="Approve the current surface as-is">Approve surface</button>
+        <button id="reset-btn" type="button" title="Reset tweaks to the approved snapshot" hidden>Reset</button>
         <button id="picker-toggle" type="button" role="switch" aria-checked="false" title="Toggle element selection (Ctrl+Shift+K)">
           <span class="switch-label">Select Elements</span>
           <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
@@ -74,6 +75,22 @@
         <button id="tweaks-close" type="button" aria-label="Close tweaks panel">×</button>
       </header>
       <div id="tweaks-body"></div>
+    </aside>
+    <aside id="sync-panel" class="floating-panel corner-bl" hidden>
+      <header>
+        <span class="panel-title">Out of sync</span>
+        <button id="sync-close" class="panel-close" type="button" aria-label="Dismiss">×</button>
+      </header>
+      <p id="sync-subtitle" class="panel-subtitle"></p>
+      <ul id="sync-list" class="sync-list"></ul>
+      <div class="panel-actions">
+        <button id="sync-reset-btn" type="button" title="Drop in-memory tweaks – snap back to the last-approved values, or to the schema defaults if this surface has never been approved">
+          Reset surface
+        </button>
+        <button id="sync-promote-btn" type="button" class="primary" title="Copy a prompt that tells Claude to update tokens.css and related briefing docs so these values become the new design-system defaults">
+          Update design system
+        </button>
+      </div>
     </aside>
     <section id="composer" hidden>
       <header>
