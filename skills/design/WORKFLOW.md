@@ -9,7 +9,9 @@ This is the default. A DS exists (either already there or freshly created via `/
 3. Identify the target. One clarifying question only if the target is ambiguous.
 4. Trace imports starting at the route or component file. Pull in the full dependency tree of UI it touches. Stop at framework boundaries.
 5. Write `00-current.html` – a faithful replica of the current page using only DS tokens. This is the anchor.
-6. Write 2 to 4 variants. Each variant explores a different axis (layout density, visual emphasis, interaction pattern). Name by axis, not by adjective: `01-tighter-spacing.html` beats `01-better.html`.
+6. Write 2 to 4 variants. Each variant explores a different **direction** (layout density default, visual emphasis, brand voice). Variants are alternatives the user picks ONE of and discards the rest – not modes they toggle between in production. Apply the variant test in `PAGES.md` before adding variant N+1. Name by axis, not by adjective: `01-tighter-spacing.html` beats `01-better.html`.
+
+   Before writing variant 2 or later, your reply MUST contain one line in this exact form: *"Variant test: finalize one → discard the rest in production? YES because [reason]."* If you can't write that line truthfully, the alternatives are tweaks/states, not variants. Use a `select` tweak instead.
 7. Update `.open-designer/designs/<design-name>/index.json`. Record `designSystem: "<name>"`.
 8. Tell the user how to launch the viewer (one short sentence).
 
