@@ -2,19 +2,27 @@
 
 A design has **pages**, each page has **variants**. This doc explains which is which and how to wire the clicks between them.
 
-## The variant test
+## The finalize-discard test
 
-Before adding a variant, ask: **if the user finalizes one of these, are the others discarded forever in production?** If yes, it is a variant. If no, it is a tweak, a state, or a responsive treatment inside one variant.
+Everything the viewer's tweaks panel exposes – **variants and tweaks** – is a designer decision. When the user clicks finalize, the unselected alternatives drop from the production design. The chosen variant + chosen tweak values are what `/design-integrate` ports to real code; the rest stays behind as draft.
 
-| Case | Discarded on finalize? | Therefore |
+Before adding a variant OR a `select`/`toggle` tweak, ask: **when the user finalizes, do the unselected options drop from production?**
+
+- **Yes** → variant (one direction wins) or tweak (one value wins).
+- **No, production needs all options live at runtime** → **page**, state, or responsive treatment. Pages are linked with `data-od-page`; states are conditions of one screen rendered together.
+
+| Case | Drop from prod on finalize? | Therefore |
 |---|---|---|
-| Cards vs list vs tree | No – prod needs all | tweak (`select`) |
-| Light vs dark | No – prod needs both | state |
-| Mobile vs desktop | No – prod needs both | responsive in one variant |
-| Compact vs cozy as user toggle | No – user-selectable | tweak |
+| Cards vs list vs tree view mode | No – prod ships all three at runtime | **page** per mode, wired by `data-od-page` |
+| Light vs dark | No – prod ships both | **page** per theme (or state, if same DOM) |
+| Mobile vs desktop | No – prod renders both | responsive in one variant |
+| User-toggleable density (cozy/comfy/roomy) | No – user picks at runtime | **page** or state, not tweak |
+| Density default = comfy (designer's pick) | Yes – only the default ships | tweak |
 | Brand-focused vs ops-focused dashboard | Yes | variant |
-| Tighter vs roomier as default | Yes | variant |
+| Tighter vs roomier as the page's default | Yes | variant |
 | Serif vs sans treatment | Yes | variant |
+
+The test catches a common trap: writing a `select` tweak with options that all need to ship. If `select.options = [cards, list, tree]` and production renders all three, the tweak is doing nothing meaningful – `finalize` snapshots one value but the others are still in the production code. That's the signal: split into pages.
 
 ## Decision tree
 
@@ -26,11 +34,11 @@ For every screen in the request, ask:
 
 If two candidates both have the same content shape but differ in layout density, emphasis, or color – they are variants of the same page, not different pages.
 
-## States and modes are not variants
+## States and modes are not variants – or tweaks
 
-Loading, empty, errored, populated, streaming, diffed – these are **states within a variant**, not pages and not variants. Do not create `log-loading`, `log-empty`, `log-populated` as sibling pages. Do not create `01-loading`, `02-errored`, `03-populated` as sibling variants either.
+Loading, empty, errored, populated, streaming, diffed – these are **states within a variant**, rendered together so a DS's tokens are visible across state pressure. Do not create `log-loading`, `log-empty`, `log-populated` as sibling pages. Do not create `01-loading`, `02-errored`, `03-populated` as sibling variants either.
 
-The same rule applies to **runtime modes** the user toggles between in production: layout mode (cards/list/tree), sidebar shown/hidden, light/dark theme, density toggle (when user-selectable). These are tweaks or states, never sibling variants. If production needs all of them, finalize cannot pick one – which means they fail the variant test.
+**Runtime modes** the user toggles between in production – view mode (cards/list/tree), sidebar shown/hidden, light/dark, user-toggleable density – fail the finalize-discard test for both variants AND tweaks: production needs every option at runtime, so finalize doesn't drop anything. They are **pages**: each mode is its own page entry; the segmented-control button that switches modes is a `data-od-page` link. The user (and the LLM) can see the navigation in the viewer rather than chasing a hidden tweak.
 
 A variant renders the interesting states **on one surface at once** – a populated row sitting next to a skeleton row sitting next to an errored row. That's what makes a DS's tokens visible across state pressure. If the user needs to step through states one at a time in the viewer, use the `state` tweak (see `SKILL.md` step 8) – it flips `data-state` on the iframe root without duplicating files.
 
@@ -80,32 +88,22 @@ Request: "Design sign-in, sign-up, and forgot-password."
 
 Request: "Design the workspace browser. It needs cards, list, and tree views."
 
-Apply the variant test: finalize one – do the others get discarded? No, production needs all three. So they are not variants.
+Apply the finalize-discard test: when the user picks one and finalizes, do the other two leave production? No – production ships all three; the user toggles between them at runtime. So they fail the variant test AND the tweak test. They are **pages**.
 
-- **Pages**: `workspace` (one page).
-- **Variants**: ONE variant per direction the user wants to try. Three view modes do NOT mean three variants.
-- **Tweak**: a `select` driving `--view-mode`:
+- **Pages**: `workspace-cards`, `workspace-list`, `workspace-tree` – three sibling pages under one design.
+- **Variants per page**: 1 to N. Within `workspace-cards` you might explore "compact cards" vs "spotlight cards" – those *are* variants (the designer finalizes one direction for the cards view).
+- **Tweaks per page**: card density inside the cards page; row density inside the list page; indent step inside the tree page. Each tweak is local to the page that uses it.
+- **Navigation**: every page renders the same segmented control. The Cards button gets `data-od-page="workspace-cards"`, List → `workspace-list`, Tree → `workspace-tree`. Same control wired the same way on every page.
 
-  ```json
-  {
-    "id": "view-mode",
-    "type": "select",
-    "label": "View mode",
-    "target": "--view-mode",
-    "options": ["cards", "list", "tree"],
-    "default": "cards"
-  }
-  ```
+```html
+<div class="seg" role="group" aria-label="View mode">
+  <button data-od-page="workspace-cards" aria-pressed="true">Cards</button>
+  <button data-od-page="workspace-list">List</button>
+  <button data-od-page="workspace-tree">Tree</button>
+</div>
+```
 
-- **CSS pattern**: gate each layout off the variable.
-
-  ```css
-  .browser[style*="--view-mode: cards"] .items { display: grid; grid-template-columns: repeat(3, 1fr); }
-  .browser[style*="--view-mode: list"]  .items { display: flex; flex-direction: column; }
-  .browser[style*="--view-mode: tree"]  .items { display: block; }
-  ```
-
-If the user wants two **directions** (e.g. dense ops dashboard vs roomy brand-led browser), each direction is one variant – and each variant carries the same view-mode tweak.
+Why pages and not a `select` tweak: the segmented control is real UI the user clicks. Pages model that explicitly – the designer (and the LLM) sees the navigation surface in the viewer rather than discovering it as a hidden parametric knob. And `/design-integrate` ports all three pages to real components, instead of porting one and silently dropping the others.
 
 ## Navigation contract
 
@@ -134,6 +132,7 @@ The user picks a winner once, the real app reads from the database.
 
 ## Common pitfalls
 
-- **Spawning variants for sibling screens**. If the request is "Meeting log and Note detail", that is two pages, not two variants of one design. The viewer's variant selector exists for styling alternatives – don't use it as a page switcher. Layout mode is not a playable axis either: cards/list/tree, sidebar on/off, light/dark are tweaks or states, not sibling variants.
+- **Spawning variants for sibling screens**. If the request is "Meeting log and Note detail", that is two pages, not two variants of one design. The viewer's variant selector exists for styling alternatives – don't use it as a page switcher.
+- **Smuggling runtime modes into a `select` tweak**. Cards/list/tree, sidebar on/off, light/dark, user-toggleable density all fail the finalize-discard test. They are sibling pages, not tweak options. If you find yourself writing `select.options = [cards, list, tree]`, stop and split into pages.
 - **Forgetting the back link**. Every detail/modal/step page needs a way out. The viewer surfaces a Back button automatically once the user navigates in, but a back chevron in the design itself keeps the draft self-explanatory.
 - **Over-fragmenting**. If two "pages" have the same structure and differ only in content (e.g. two list views with different filters), they're likely one page with a filter control, not two pages.

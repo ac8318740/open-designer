@@ -59,7 +59,7 @@ Before writing or editing any HTML:
 - **Apply `voice.md` to every string** – casing, punctuation rules, length bias, sample-string flavor for placeholders.
 - **Honour `rules.md`.** Before writing card markup, check the cards rules. Before writing a destructive button, check the danger rules.
 - **Avoid flagged-substitution assets.** If `gaps.md` says no real logo, use the placeholder pattern; if Geist Mono isn't available, fall back per gaps.md guidance.
-- **Variants render realistic scenes, not single states or modes.** When a page has state-revealing components in the briefing (skeleton, error, empty, populated, streaming, diffed), each variant renders the interesting states simultaneously – a populated row next to a skeleton row next to an empty row – so the variant's treatment is visible across states. Derive the state set from `briefing/components.md` + `briefing/extractable-components.md` + `gaps.md`, not from a checklist. Don't produce separate files just to show state differences; that is what the `state` tweak is for (see step 8). The same applies to user-selectable runtime modes – view mode (cards/list/tree), sidebar on/off, light/dark, density toggle – those belong in `select` or `toggle` tweaks, never as sibling variants.
+- **Variants render realistic scenes, not single states or modes.** When a page has state-revealing components in the briefing (skeleton, error, empty, populated, streaming, diffed), each variant renders the interesting states simultaneously – a populated row next to a skeleton row next to an empty row – so the variant's treatment is visible across states. Derive the state set from `briefing/components.md` + `briefing/extractable-components.md` + `gaps.md`, not from a checklist. Don't produce separate files just to show state differences; that is what the `state` tweak is for (see step 8). User-selectable **runtime modes** – view mode (cards/list/tree), sidebar shown/hidden, light/dark, user-toggleable density – belong as sibling **pages**, not tweaks: production needs all of them at runtime, so they fail the finalize-discard test. Wire mode-switch controls with `data-od-page`. See `PAGES.md` worked example #6.
 
 ### Iteration from a pasted selection
 
@@ -90,9 +90,9 @@ Every design has one or more **pages**; every page has one or more **variants**.
 - A **page** is a distinct screen or route – the meeting log, the note detail, the settings view. Different pages render different *content structures*.
 - A **variant** is an alternative **direction** the user picks ONE of and ships; the others are discarded by `finalize`. Tighter spacing as the page's default, brand-led vs ops-led emphasis, serif vs sans treatment. Variants share the page's content structure and differ in styling.
 
-**Rule of thumb**: if clicking something in the real app would change the URL or swap the main content region, it's a different page. If it's the same screen laid out differently, it's a variant.
+**Rule of thumb**: if clicking something in the real app would change the URL or swap the main content region (tab switch, view-mode swap, list → detail), it's a different page. If it's the same screen laid out differently as a one-time direction the designer commits to, it's a variant.
 
-**The variant test**: before writing variant 2 or later, your reply MUST contain one line in this exact form: *"Variant test: finalize one → discard the rest in production? YES because [reason]."* If you can't write that line truthfully, the alternatives are tweaks/states, not variants. Use a `select` tweak instead.
+**The finalize-discard test (covers variants AND `select`/`toggle` tweaks)**: everything in the viewer's tweaks panel is a designer decision. When the user finalizes, the unselected alternatives drop from the production design. Before writing variant 2 or later, OR a `select`/`toggle` tweak, your reply MUST contain one line in this exact form: *"Finalize-discard test: when the user finalizes, do the unselected options drop from production? YES because [reason]."* If you can't write that line truthfully, the alternatives must stay live in production – so they are pages or states, not variants and not tweaks. Wire them with `data-od-page`.
 
 See `PAGES.md` for the decision tree and worked examples.
 
@@ -187,7 +187,7 @@ For each request:
    **Pick by the shape of the axis, not by habit:**
    - Continuous numeric range → `slider` (padding, radius, font size, shadow blur).
    - Open color choice → `color` (accent, surface, CTA bg).
-   - Categorical preset, 3+ named options → `select`. **Canonical mode axes that always belong here, never as sibling variants:** view mode (cards/list/tree), sidebar presence (shown/hidden/auto), density when the user toggles it (cozy/comfy/roomy), light/dark theme. Also: corner style square/soft/pill, any other named preset.
+   - Categorical preset, 3+ named options → `select` (corner style square/soft/pill, designer-chosen density default cozy/comfy/roomy where production locks the choice, any other designer-picked preset that ships as a single value). **Do NOT use `select` for runtime modes the user toggles in production**: view mode (cards/list/tree), sidebar shown/hidden, light/dark, user-toggleable density. Those fail the finalize-discard test (production needs all options live) and belong as sibling **pages**, wired with `data-od-page`. See `PAGES.md` worked example #6.
    - Binary on/off flip → `toggle` (show ornament, dark section, underline links, gradient background).
    - Surface state switch → `state` (populated / loading / empty / errored). Unlike `select`, this writes the chosen value to a `data-state` attribute on the iframe root instead of a CSS custom property. The variant's HTML renders all states stacked by default; `data-state` on `:root` is a hook for showing one at a time.
    - Free-form string → `text` (rare).
