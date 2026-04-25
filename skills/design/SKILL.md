@@ -207,6 +207,8 @@ For each request:
    - `data-od-page="pageId"` → jumps to the target page's last-active (or first) variant.
    - `data-od-page="pageId:variantId"` → jumps to a specific variant.
 
+   **Do NOT write an inline `<script>` that listens for `data-od-page` clicks and posts to `window.parent`.** The viewer auto-injects the navigation handler at iframe load. Inline duplicates fire a second message with a stale shape, double-bump the back-button history, AND swallow clicks during element-select mode (their handlers race with the picker). Other inline scripts (state observers, chevron toggles, mutation observers) are fine – just leave the `data-od-page` plumbing to the viewer.
+
    Wire obvious connections by default – the user should not have to ask. See `PAGES.md` for patterns (list → detail, tabs, modal open, auth flow).
 
 10. Tell the user how to launch the viewer (from their repo root):

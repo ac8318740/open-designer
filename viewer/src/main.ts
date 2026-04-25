@@ -938,10 +938,12 @@ function injectNavScript(frame: HTMLIFrameElement): void {
 const NAV_SCRIPT = `
 (function(){
   document.addEventListener('click', function(e){
+    if (document.body && document.body.classList && document.body.classList.contains('od-picker-on')) return;
     var link = e.target.closest('[data-od-page]');
     if (!link) return;
-    e.preventDefault();
     var spec = link.getAttribute('data-od-page') || '';
+    if (!spec) return;
+    e.preventDefault();
     var parts = spec.split(':');
     parent.postMessage({
       type: 'od:navigate',
@@ -992,8 +994,10 @@ function handleFrameMessage(e: MessageEvent): void {
   const ctx = activeContext();
   if (!ctx) return;
 
-  const targetPageId = String(data.pageId || "");
+  const targetPageId = String(data.pageId || data.page || "");
+  if (!targetPageId) return;
   const targetVariantId = data.variantId ? String(data.variantId) : null;
+  if (targetPageId === activePage.id && (!targetVariantId || targetVariantId === activeVariant.id)) return;
   const next = ctx.pages.find((p) => p.id === targetPageId);
   if (!next) {
     showToast(`No page "${targetPageId}" in this ${mode === "designs" ? "design" : "design system"}.`);
