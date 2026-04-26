@@ -64,9 +64,12 @@ export function savePanelOpen(open: boolean): void {
   }
 }
 
-function resolveSelectValue(tweak: Tweak, raw: string): string {
-  if (!tweak.options) return raw;
-  for (const opt of tweak.options) {
+type WithOptions = { options?: Array<string | { label: string; value: string }> };
+
+function resolveSelectValue(tweak: WithOptions, raw: string): string {
+  const options = tweak.options;
+  if (!options) return raw;
+  for (const opt of options) {
     if (typeof opt === "string") {
       if (opt === raw) return opt;
     } else if (opt.value === raw || opt.label === raw) {
@@ -76,7 +79,12 @@ function resolveSelectValue(tweak: Tweak, raw: string): string {
   return raw;
 }
 
-function defaultFor(tweak: Tweak): string {
+// `state` tweaks default to "(unfiltered)" – the iframe root has no
+// `data-state` attribute and the variant renders all states stacked. Other
+// tweaks fall back to declared defaults or type-specific placeholders.
+export const STATE_UNFILTERED = "";
+
+export function defaultFor(tweak: Tweak): string {
   if (tweak.default !== undefined) return String(tweak.default);
   switch (tweak.type) {
     case "toggle":
@@ -85,12 +93,13 @@ function defaultFor(tweak: Tweak): string {
       return String(tweak.min ?? 0);
     case "color":
       return "#000000";
-    case "select":
-    case "state": {
+    case "select": {
       const first = tweak.options?.[0];
       if (first === undefined) return "";
       return typeof first === "string" ? first : first.value;
     }
+    case "state":
+      return STATE_UNFILTERED;
     default:
       return "";
   }
@@ -172,7 +181,9 @@ export function emittedValueFor(
   if (base === null) return null;
   const delta = parseFloat(raw);
   if (!Number.isFinite(delta)) return null;
-  const unit = tweak.unit ?? "";
+  // resolvedTransform only returns "add"/"scale" for slider tweaks – at this
+  // point in the function `transform` is non-"set", so the cast is sound.
+  const unit = (tweak as { unit?: string }).unit ?? "";
   const next = transform === "add" ? base + delta : base * delta;
   // Trim trailing zeros so 6.00 reads as 6 (keeps promote-prompt output tidy).
   return `${+next.toFixed(4)}${unit}`;
@@ -187,16 +198,30 @@ export function applyTweaksToIframe(
   const doc = iframe.contentDocument;
   if (!doc) return;
   const cssParts: string[] = [];
+  // Track whether *any* state tweak is set so we can decide between setting
+  // and removing the data-state attribute. If multiple state tweaks exist
+  // (rare), the last non-empty wins – the docs only commit to one at a time.
+  let stateAttr: string | null = null;
+  let sawStateTweak = false;
   for (const t of tweaks) {
     const raw = values[t.id] ?? defaultFor(t);
     if (t.type === "state") {
-      doc.documentElement.setAttribute("data-state", cssValueFor(t, raw));
+      sawStateTweak = true;
+      const resolved = cssValueFor(t, raw);
+      if (resolved !== "") stateAttr = resolved;
       continue;
     }
     for (const target of resolvedTargets(t)) {
       const emitted = emittedValueFor(t, raw, target, tokensMap);
       if (emitted === null) continue;
       cssParts.push(`${target}: ${emitted};`);
+    }
+  }
+  if (sawStateTweak) {
+    if (stateAttr === null) {
+      doc.documentElement.removeAttribute("data-state");
+    } else {
+      doc.documentElement.setAttribute("data-state", stateAttr);
     }
   }
   let style = doc.getElementById(TWEAKS_STYLE_ID) as HTMLStyleElement | null;
@@ -258,7 +283,7 @@ export function renderTweaksPanel(args: {
     for (const v of variants) {
       const opt = document.createElement("option");
       opt.value = v.id;
-      opt.textContent = v.id === chosenVariantId ? `${v.label} ★` : v.label;
+      opt.textContent = v.id === chosenVariantId ? `★ ${v.label}` : v.label;
       if (v.id === activeVariant) opt.selected = true;
       select.appendChild(opt);
     }
@@ -267,19 +292,49 @@ export function renderTweaksPanel(args: {
     root.appendChild(group);
   }
 
-  if (!tweaks.length) {
+  // Render real tweaks in the main body and state tweaks in a separate
+  // "Inspect" section underneath. State tweaks aren't designer decisions –
+  // they're runtime conditions exposed as a viewing aid – so the visual
+  // separation matters for the finalize-discard test the user runs in
+  // their head. Both lists may be empty; only render headers when populated.
+  const realTweaks = tweaks.filter((t) => t.type !== "state");
+  const stateTweaks = tweaks.filter((t) => t.type === "state");
+
+  if (realTweaks.length === 0 && stateTweaks.length === 0) {
     const empty = document.createElement("p");
     empty.className = "tweak-empty";
-    empty.textContent = "No tweaks declared for this draft.";
+    empty.textContent = "No tweaks declared.";
     root.appendChild(empty);
   } else {
-    for (const tweak of tweaks) {
+    for (const tweak of realTweaks) {
       root.appendChild(
         renderTweak(tweak, values[tweak.id] ?? defaultFor(tweak), onChange, {
           showPromote,
           onPromote,
         }),
       );
+    }
+    if (stateTweaks.length > 0) {
+      const section = document.createElement("div");
+      section.className = "tweak-inspect-section";
+      const header = document.createElement("h3");
+      header.className = "tweak-section-header";
+      header.textContent = "Inspect (runtime states)";
+      section.appendChild(header);
+      const help = document.createElement("p");
+      help.className = "tweak-section-help";
+      help.textContent =
+        "Filter to one state at a time, or leave unset to see them stacked. Not a designer decision – production wires these to its state machine.";
+      section.appendChild(help);
+      for (const tweak of stateTweaks) {
+        section.appendChild(
+          renderTweak(tweak, values[tweak.id] ?? defaultFor(tweak), onChange, {
+            showPromote: false,
+            onPromote: undefined,
+          }),
+        );
+      }
+      root.appendChild(section);
     }
   }
 
@@ -380,6 +435,18 @@ function renderTweak(
     case "state": {
       const select = document.createElement("select");
       select.id = `tweak-${tweak.id}`;
+      // State tweaks get an explicit "(unfiltered)" option at the top –
+      // value "" means "no data-state attribute on root, render all
+      // stacked." Without this option, switching back from a filtered
+      // state required clicking elsewhere; making it explicit removes
+      // the workaround.
+      if (tweak.type === "state") {
+        const unfiltered = document.createElement("option");
+        unfiltered.value = STATE_UNFILTERED;
+        unfiltered.textContent = "(unfiltered – stacked)";
+        if (value === STATE_UNFILTERED) unfiltered.selected = true;
+        select.appendChild(unfiltered);
+      }
       for (const opt of tweak.options ?? []) {
         const option = document.createElement("option");
         if (typeof opt === "string") {

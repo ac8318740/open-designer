@@ -16,7 +16,6 @@ const STYLE_KEYS = [
   "width",
   "height",
   "color",
-  "background",
   "background-color",
   "background-image",
   "border",

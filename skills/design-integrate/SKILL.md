@@ -98,10 +98,11 @@ Per-page triage and execution. The design's chosen variants + tweaks are the spe
 
 1. Find the target design. If the user named one, use that. Otherwise scan `.open-designer/designs/*/index.json` and pick the most recent `chosen.finalizedAt`.
 2. If no `chosen` exists, stop and say: "Pick a variant in the viewer first (click **Finalize this** in the Tweaks panel), then re-run."
-3. Read `chosen.pages` – each entry maps a page id to `{ variantId, tweaks }`. For each page:
+3. Read `chosen.pages` – each entry maps a page id to `{ variantId, tweaks, state? }`. For each page:
    - Look up the page in `pages` by id.
    - Match `variantId` to the page's `variants[].id` and read that variant's `file`.
    - Apply the merged tweaks (design-level + page-level + variant-declared), overriding with the chosen `tweaks` snapshot. For each tweak, replace the default at its `target` CSS variable in the HTML's `:root`.
+   - **Do NOT bake `state` values into `:root` overrides.** State entries are runtime conditions (loading/empty/errored/streaming/etc.) that the production component must dispatch on, not designer decisions. If the chosen page has any `state` entries, surface a clarification question to the user via `AskUserQuestion`: *"This page has a `state` tweak with options X. Wire the production component to dispatch on the API state machine. Confirm or describe the dispatch."* Use the answer in the executor brief.
    - Write the resolved HTML to `/tmp/od-resolved-<design>-<ts>/resolved/<pageId>.html`.
 4. **Legacy designs** (no `chosen.pages`, only `chosen.variantId`): treat as a single implicit page `main`.
 
@@ -187,20 +188,14 @@ If integration discovered a real gap, **append-only** write a `briefing/gaps.md`
 
 #### Step 10 – Mark shipped
 
-Update the design's `index.json`:
+Stamp `chosen.shippedAt` via the launcher's finalize endpoint:
 
-```json
-"chosen": {
-  "finalizedAt": "2026-04-22T10:00:00Z",
-  "shippedAt": "2026-04-22T14:23:00Z",
-  "pages": {
-    "log":    { "variantId": "02-compact", "tweaks": {...} },
-    "detail": { "variantId": "01-default", "tweaks": {...} }
-  }
-}
+```
+POST /data/designs/<name>/finalize
+{ "markShipped": "<ISO timestamp>" }
 ```
 
-This is the ONLY write to `designs/<name>/` this skill is allowed to make. POST the whole `chosen` object (with `shippedAt` added) to the finalize endpoint so the write is atomic.
+The launcher writes the timestamp atomically and returns the updated chosen block. This is the ONLY write to `designs/<name>/` this skill is allowed to make.
 
 Do NOT delete drafts.
 

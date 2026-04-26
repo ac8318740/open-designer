@@ -18,6 +18,7 @@ import {
   isValidDesignName,
   safeJoin,
   titlecaseId,
+  validateDesignIndex,
 } from "../../launcher/finalize.mjs";
 
 const MIME: Record<string, string> = {
@@ -33,6 +34,18 @@ const MIME: Record<string, string> = {
 };
 
 export const DATA_CHANGED_EVENT = "open-designer:data-changed";
+
+function readConfigSync(root: string): { defaultDesignSystem?: string } {
+  const path = join(root, "config.json");
+  if (!existsSync(path)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    if (parsed && typeof parsed === "object") return parsed;
+  } catch (err) {
+    console.warn(`config.json unreadable: ${(err as Error).message}`);
+  }
+  return {};
+}
 
 function atomicWriteSync(path: string, content: string): void {
   const tmp = path + ".tmp";
@@ -307,13 +320,25 @@ export function dataServer(dataRoot: string): Plugin {
           res.setHeader("content-type", MIME[".json"]);
           res.setHeader("cache-control", "no-store");
           if (!existsSync(designsRoot)) {
-            res.end(JSON.stringify({ designs: [] }));
+            res.end(JSON.stringify({ designs: [], _warnings: [] }));
             return;
           }
           const names = readdirSync(designsRoot, { withFileTypes: true })
             .filter((e) => e.isDirectory())
             .map((e) => e.name);
-          res.end(JSON.stringify({ designs: names }));
+          const warnings: string[] = [];
+          for (const name of names) {
+            const indexPath = join(designsRoot, name, "index.json");
+            if (!existsSync(indexPath)) continue;
+            try {
+              const raw = JSON.parse(readFileSync(indexPath, "utf8"));
+              for (const w of validateDesignIndex(raw, name)) warnings.push(w);
+            } catch {
+              /* unreadable – skip */
+            }
+          }
+          for (const w of warnings) console.warn(w);
+          res.end(JSON.stringify({ designs: names, _warnings: warnings }));
           return;
         }
 
@@ -321,8 +346,9 @@ export function dataServer(dataRoot: string): Plugin {
           const dsRoot = join(root, "design-systems");
           res.setHeader("content-type", MIME[".json"]);
           res.setHeader("cache-control", "no-store");
+          const config = readConfigSync(root);
           if (!existsSync(dsRoot)) {
-            res.end(JSON.stringify({ designSystems: [] }));
+            res.end(JSON.stringify({ designSystems: [], defaultDesignSystem: config.defaultDesignSystem ?? null }));
             return;
           }
           const out: Array<{ name: string; description: string | null; extends: string | null; updatedAt: string | null }> = [];
@@ -342,7 +368,10 @@ export function dataServer(dataRoot: string): Plugin {
               console.warn(`Skipping DS ${e.name}: unreadable manifest.`);
             }
           }
-          res.end(JSON.stringify({ designSystems: out }));
+          res.end(JSON.stringify({
+            designSystems: out,
+            defaultDesignSystem: config.defaultDesignSystem ?? null,
+          }));
           return;
         }
 

@@ -1,5 +1,9 @@
-import type { Approval, Approvals, Surface } from "./types";
+import type { Approval, Approvals, Surface, Tweak } from "./types";
+import { isDivergent } from "./surface-state";
 
+// On-disk approval keys use "tokens/<id>" for the tokens-kind surfaces, even
+// though the on-disk path under DATA_ROOT is `/preview/`. The key was named
+// "tokens" first; the surface-kind rename caught up to it in v2.
 export function approvalKey(surface: Pick<Surface, "kind" | "id">): string {
   return `${surface.kind === "page" ? "pages" : "tokens"}/${surface.id}`;
 }
@@ -12,45 +16,33 @@ export function lookupApproval(
   return approvals.surfaces[approvalKey(surface)] ?? null;
 }
 
-// A surface is diverged when there is no snapshot to compare against, or
-// when the current (variantId, touched tweaks) pair differs from the
-// snapshot. Untouched tweaks expand to fallback defaults we don't want to
-// persist into approvals.json, so divergence ignores them: the comparison
-// key set is the union of the snapshot's keys and the user's current touched
-// keys. Every key in the union must match, and a touched key absent from the
-// snapshot counts as a new user-introduced difference.
+// A surface is diverged when there is no snapshot to compare against, or when
+// the current (variantId, tweak values) pair differs from the snapshot. The
+// comparison densifies both sides through the surface's tweak schema – see
+// `isDivergent` in surface-state.ts for why.
 export function computeDivergence(
-  surface: Surface,
+  surfaceTweaks: Tweak[],
   currentVariantId: string | null,
   currentTweaks: Record<string, string>,
-  touched: ReadonlySet<string>,
   snapshot: Approval | null,
 ): boolean {
-  void surface;
-  if (!snapshot) return true;
-  if ((snapshot.variantId ?? null) !== (currentVariantId ?? null)) return true;
-  const snapshotTweaks = snapshot.tweaks ?? {};
-  const keys = new Set<string>([...Object.keys(snapshotTweaks), ...touched]);
-  for (const key of keys) {
-    const snapValue = snapshotTweaks[key];
-    const currValue = currentTweaks[key];
-    if (snapValue === undefined) return true; // user touched a key not in the snapshot
-    if (currValue === undefined) return true; // snapshotted tweak no longer present
-    if (snapValue !== currValue) return true;
-  }
-  return false;
+  return isDivergent(
+    surfaceTweaks,
+    { variantId: currentVariantId, tweaks: currentTweaks },
+    snapshot,
+  );
 }
 
 export async function loadApprovals(dsName: string): Promise<Approvals> {
   try {
     const r = await fetch(`/data/design-systems/${dsName}/approvals.json`);
-    if (!r.ok) return { schemaVersion: 1, surfaces: {} };
+    if (!r.ok) return { schemaVersion: 2, surfaces: {} };
     const j = (await r.json()) as Approvals;
     if (!j || typeof j !== "object" || !j.surfaces) {
-      return { schemaVersion: 1, surfaces: {} };
+      return { schemaVersion: 2, surfaces: {} };
     }
     return j;
   } catch {
-    return { schemaVersion: 1, surfaces: {} };
+    return { schemaVersion: 2, surfaces: {} };
   }
 }

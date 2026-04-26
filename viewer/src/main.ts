@@ -35,6 +35,11 @@ import {
   loadApprovals,
   lookupApproval,
 } from "./approvals";
+import {
+  collectSurfaceTweaks,
+  partitionByType,
+  resolveSurfaceState,
+} from "./surface-state";
 import { computeTokenDivergences, loadTokensMap } from "./token-sync";
 import { buildPromotePrompt } from "./sync-prompts";
 // Canonical preview chrome – injected into preview/*.html iframes so every
@@ -301,7 +306,7 @@ function activeVariantUrl(): string | null {
   }
   if (mode === "design-systems" && activeDS) {
     const surface = surfaceOf(activeDS, activePage?.id);
-    if (surface?.kind === "preview") {
+    if (surface?.kind === "tokens") {
       return `/design-systems/${activeDS.name}/preview/${activeVariant.file}`;
     }
     return `/design-systems/${activeDS.name}/pages/${activeVariant.file}`;
@@ -347,7 +352,7 @@ function normalizeIndex(raw: DesignIndex): { index: NormalizedIndex; pages: Page
       if (!livePageIds.has(pageId)) continue;
       const page = pages.find((p) => p.id === pageId)!;
       if (!page.variants.some((v) => v.id === entry.variantId)) continue;
-      filtered[pageId] = entry;
+      filtered[pageId] = migrateChosenStateSplit(page, entry);
     }
     chosen = Object.keys(filtered).length > 0
       ? { ...chosen, pages: filtered }
@@ -359,6 +364,34 @@ function normalizeIndex(raw: DesignIndex): { index: NormalizedIndex; pages: Page
   if (chosen) index.chosen = chosen;
 
   return { index, pages, chosen };
+}
+
+// V1→V2 migration: legacy designs stored state values in `chosen.tweaks`
+// alongside designer decisions. The new shape splits them into a sibling
+// `state` map. Walk the page's tweak schema, move any value whose tweak is
+// declared `type: "state"` into a fresh `state` map, and strip from `tweaks`.
+// The migration is in-memory; it persists to disk on the next finalize POST.
+function migrateChosenStateSplit(page: Page, entry: ChosenPage): ChosenPage {
+  const tweakTypes = new Map<string, string>();
+  for (const t of page.tweaks ?? []) tweakTypes.set(t.id, t.type);
+  for (const v of page.variants) for (const t of v.tweaks ?? []) tweakTypes.set(t.id, t.type);
+  const tweaks: Record<string, string> = {};
+  const state: Record<string, string> = { ...(entry.state ?? {}) };
+  let migrated = false;
+  for (const [k, v] of Object.entries(entry.tweaks ?? {})) {
+    if (tweakTypes.get(k) === "state") {
+      state[k] = v;
+      migrated = true;
+    } else {
+      tweaks[k] = v;
+    }
+  }
+  if (!migrated && !entry.state) return entry;
+  return {
+    ...entry,
+    tweaks,
+    ...(Object.keys(state).length > 0 ? { state } : {}),
+  };
 }
 
 function normalizeDSPages(raw: DesignSystemIndexPages): Page[] {
@@ -423,8 +456,15 @@ async function loadDesigns(): Promise<DesignEntry[]> {
   try {
     const r = await fetch(`${DATA_ROOT}/designs/index.json`);
     if (r.ok) {
-      const j = (await r.json()) as { designs?: string[]; projects?: string[] };
+      const j = (await r.json()) as {
+        designs?: string[];
+        projects?: string[];
+        _warnings?: string[];
+      };
       const names = j.designs ?? j.projects ?? [];
+      // Schema warnings are warn-don't-fail this release. They surface as
+      // console output here; next release will upgrade to a hard error.
+      for (const w of j._warnings ?? []) console.warn(`[od] schema: ${w}`);
       for (const name of names) {
         const ir = await fetch(`${DATA_ROOT}/designs/${name}/index.json`);
         if (ir.ok) out.push({ design: name, index: (await ir.json()) as DesignIndex });
@@ -436,12 +476,21 @@ async function loadDesigns(): Promise<DesignEntry[]> {
   return out;
 }
 
+// Captured alongside the DS list so the active-DS fallback chain can use it
+// when nothing else picks a DS. Reset to null when the launcher returns no
+// config; callers must tolerate a stale default that no longer exists.
+let configDefaultDesignSystem: string | null = null;
+
 async function loadDesignSystems(): Promise<NormalizedDS[]> {
   const out: NormalizedDS[] = [];
   try {
     const r = await fetch(`${DATA_ROOT}/design-systems/index.json`);
     if (r.ok) {
-      const j = (await r.json()) as { designSystems?: Array<{ name: string }> };
+      const j = (await r.json()) as {
+        designSystems?: Array<{ name: string }>;
+        defaultDesignSystem?: string | null;
+      };
+      configDefaultDesignSystem = j.defaultDesignSystem ?? null;
       const list = j.designSystems ?? [];
       for (const entry of list) {
         const name = entry.name;
@@ -479,7 +528,7 @@ async function loadDesignSystems(): Promise<NormalizedDS[]> {
             tweaks: p.tweaks,
           })),
           ...previews.map((pv) => ({
-            kind: "preview" as const,
+            kind: "tokens" as const,
             id: pv.id,
             label: pv.label,
             // Synthesize a single default variant when none authored, so the
@@ -501,10 +550,13 @@ async function loadDesignSystems(): Promise<NormalizedDS[]> {
   return out;
 }
 
-// Render each surface as a Page so the existing page/variant plumbing (back
-// nav, storage keys, tweaks panel) works unchanged for previews too. Preview
-// surfaces may carry authored variants and tweaks from preview/index.json;
-// when they don't, loadDesignSystems synthesizes a single default variant.
+// `surfaces` is the source of truth – kind, file, and authored tweaks live
+// there. `pages` is a derived projection used so the existing page/variant
+// plumbing (back nav, storage keys, tweaks panel) works unchanged for
+// tokens-kind surfaces too. Tokens surfaces may carry authored variants and
+// tweaks from preview/index.json; when they don't, loadDesignSystems
+// synthesizes a single default variant. De-duplication of the two lists is
+// out of scope for now.
 function dsSurfacesToPages(surfaces: Surface[]): Page[] {
   return surfaces.map((s) => ({
     id: s.id,
@@ -617,10 +669,21 @@ async function refresh(): Promise<void> {
     iframe.hidden = false;
 
     const storedName = loadActiveDS();
-    const ds =
+    // Precedence: previous DS in this session → localStorage → config's
+    // defaultDesignSystem → first DS alphabetically. A stale default that
+    // doesn't exist in the list falls through to the first.
+    let ds =
       designSystems.find((p) => p.name === prevDSName) ??
-      designSystems.find((p) => p.name === storedName) ??
-      designSystems[0];
+      designSystems.find((p) => p.name === storedName);
+    if (!ds && configDefaultDesignSystem) {
+      const named = designSystems.find((p) => p.name === configDefaultDesignSystem);
+      if (named) ds = named;
+      else
+        console.warn(
+          `[od] config defaultDesignSystem "${configDefaultDesignSystem}" not found – falling back to "${designSystems[0].name}".`,
+        );
+    }
+    if (!ds) ds = designSystems[0];
     activeDS = ds;
     activeDesign = null;
     if (ds.pages.length === 0) {
@@ -746,7 +809,7 @@ function selectVariant(variant: VariantEntry, opts: NavOpts = {}): void {
   } else if (mode === "design-systems" && activeDS) {
     const surface = surfaceOf(activeDS, activePage?.id);
     nextUrl =
-      surface?.kind === "preview"
+      surface?.kind === "tokens"
         ? `${DATA_ROOT}/design-systems/${activeDS.name}/preview/${variant.file}`
         : `${DATA_ROOT}/design-systems/${activeDS.name}/pages/${variant.file}`;
   }
@@ -795,9 +858,48 @@ function selectVariant(variant: VariantEntry, opts: NavOpts = {}): void {
       requestAnimationFrame(() => {
         syncIframeBackground(iframe);
         iframe.classList.remove("fading");
+        warnIfStateUnused(iframe, tweaks);
       });
     });
   };
+}
+
+// Heuristic check after the iframe's stylesheets resolve: if a state tweak
+// is declared on this surface but no rule in the document selects on
+// [data-state=...], the author probably forgot to wire the CSS – a common
+// trip-up that produces a silent "states all stacked even when filtered."
+function warnIfStateUnused(frame: HTMLIFrameElement, tweaks: Tweak[]): void {
+  if (!tweaks.some((t) => t.type === "state")) return;
+  const doc = frame.contentDocument;
+  if (!doc) return;
+  const stylesheets = Array.from(doc.styleSheets) as CSSStyleSheet[];
+  const seen = stylesheets.some((sheet) => {
+    let rules: CSSRuleList;
+    try {
+      rules = sheet.cssRules;
+    } catch {
+      return false; // cross-origin or yet-to-load – skip silently.
+    }
+    return walkRulesForDataState(rules);
+  });
+  if (!seen) {
+    console.warn(
+      "[od] this surface declares a `state` tweak but no rule matches `[data-state=...]` – the variant won't filter. See SKILL.md step 8 for the CSS pattern.",
+    );
+  }
+}
+
+function walkRulesForDataState(rules: CSSRuleList): boolean {
+  for (let i = 0; i < rules.length; i++) {
+    const rule = rules[i];
+    if (rule instanceof CSSStyleRule && rule.selectorText.includes("data-state")) {
+      return true;
+    }
+    if (rule instanceof CSSGroupingRule && walkRulesForDataState(rule.cssRules)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function reloadActiveVariant(): void {
@@ -844,7 +946,7 @@ function injectTokensChain(frame: HTMLIFrameElement): void {
     el.remove();
   }
   // Preview surfaces already <link> ../tokens.css – skip to avoid a duplicate fetch.
-  if (mode === "design-systems" && surfaceOf(activeDS, activePage?.id)?.kind === "preview") {
+  if (mode === "design-systems" && surfaceOf(activeDS, activePage?.id)?.kind === "tokens") {
     return;
   }
   const dsName =
@@ -869,7 +971,7 @@ function injectPreviewChrome(frame: HTMLIFrameElement): void {
   const doc = frame.contentDocument;
   if (!doc) return;
   if (mode !== "design-systems") return;
-  if (surfaceOf(activeDS, activePage?.id)?.kind !== "preview") return;
+  if (surfaceOf(activeDS, activePage?.id)?.kind !== "tokens") return;
   let style = doc.getElementById("od-preview-chrome") as HTMLStyleElement | null;
   if (!style) {
     style = doc.createElement("style");
@@ -1060,7 +1162,7 @@ function populatePageSelect(): void {
 
   if (mode === "design-systems" && activeDS) {
     const pageSurfaces = activeDS.surfaces.filter((s) => s.kind === "page");
-    const previewSurfaces = activeDS.surfaces.filter((s) => s.kind === "preview");
+    const previewSurfaces = activeDS.surfaces.filter((s) => s.kind === "tokens");
     if (pageSurfaces.length) {
       pageSelect.appendChild(buildSurfaceGroup("Pages", pageSurfaces));
     }
@@ -1098,7 +1200,10 @@ function buildSurfaceGroup(label: string, surfaces: Surface[]): HTMLOptGroupElem
 }
 
 // Returns the dot state for a surface: "approved" (green), "diverged"
-// (yellow – includes never-approved), or "" (mode not DS / no data).
+// (yellow), or "" (mode not DS / no data). A never-visited surface with no
+// snapshot is *not* diverged – the user hasn't disagreed with anything yet
+// and the snapshot's variant pick is the most accurate guess of what they'd
+// see on visit.
 function dotForSurface(surface: Surface): string {
   if (!activeDS) return "";
   const snapshot = lookupApproval(activeDS.approvals, surface);
@@ -1106,15 +1211,15 @@ function dotForSurface(surface: Surface): string {
   if (surface.id === activePage?.id) {
     return divergence ? "diverged" : "approved";
   }
-  // For other surfaces, compare snapshot against storage-persisted state.
-  const kindKey = `ds:${activeDS.name}`;
-  const storedVariant =
-    loadActiveVariant(kindKey, surface.id) ?? surface.variants[0]?.id ?? null;
-  const storedTweaks = storedVariant
-    ? loadStoredValues(kindKey, surface.id, storedVariant)
-    : {};
-  const storedTouched = new Set(Object.keys(storedTweaks));
-  return computeDivergence(surface, storedVariant, storedTweaks, storedTouched, snapshot)
+  const variant =
+    surface.variants.find((v) => v.id === snapshot.variantId) ??
+    surface.variants[0] ??
+    null;
+  const resolved = resolveSurfaceState(surface, activeDS, {
+    liveVariantId: variant?.id ?? null,
+  });
+  const surfaceTweaks = collectSurfaceTweaks(activeDS, surface, variant);
+  return computeDivergence(surfaceTweaks, resolved.variantId, resolved.tweaks, snapshot)
     ? "diverged"
     : "approved";
 }
@@ -1242,9 +1347,13 @@ function renderChosenPill(): void {
 
 async function finalizePage(): Promise<void> {
   if (!activeDesign || !activePage || !activeVariant) return;
+  const tweaks = collectTweaks(activeDesign.index, activePage, activeVariant);
+  const split = partitionByType(tweaks, tweakValues);
+  if (!(await confirmFinalizeDiscards(activeDesign, [activePage], { [activePage.id]: activeVariant.id }))) return;
   const entry: ChosenPage = {
     variantId: activeVariant.id,
-    tweaks: { ...tweakValues },
+    tweaks: split.tweaks,
+    ...(Object.keys(split.state).length > 0 ? { state: split.state } : {}),
   };
   try {
     const res = await postFinalize({
@@ -1263,12 +1372,24 @@ async function finalizePage(): Promise<void> {
 async function finalizeAllPages(): Promise<void> {
   if (!activeDesign) return;
   const allPages: Record<string, ChosenPage> = {};
+  const variantPicks: Record<string, string> = {};
   for (const page of activeDesign.pages) {
     const variantId = loadActiveVariant(activeDesign.name, page.id) ?? page.variants[0]?.id;
     if (!variantId) continue;
+    const variant = page.variants.find((v) => v.id === variantId) ?? page.variants[0];
+    const tweaks = collectTweaks(activeDesign.index, page, variant);
     const stored = loadStoredValues(activeDesign.name, page.id, variantId);
-    allPages[page.id] = { variantId, tweaks: stored };
+    // Stored values are touched-only. Densify against the schema so that
+    // the partitioner can route state values out of `tweaks` into `state`.
+    const split = partitionByType(tweaks, stored);
+    allPages[page.id] = {
+      variantId,
+      tweaks: split.tweaks,
+      ...(Object.keys(split.state).length > 0 ? { state: split.state } : {}),
+    };
+    variantPicks[page.id] = variantId;
   }
+  if (!(await confirmFinalizeDiscards(activeDesign, activeDesign.pages, variantPicks))) return;
   try {
     const res = await postFinalize({ finalizeAll: { pages: allPages } });
     applyChosenResponse(res);
@@ -1278,6 +1399,93 @@ async function finalizeAllPages(): Promise<void> {
     console.error(err);
     showToast(`Finalize failed: ${(err as Error).message}`);
   }
+}
+
+// Show a modal listing every variant and select/toggle tweak that will drop
+// from production at finalize time, with the recorded discardReason. The
+// user must confirm to proceed. Returns true to continue, false to cancel.
+async function confirmFinalizeDiscards(
+  design: NormalizedDesign,
+  pages: Page[],
+  variantPicks: Record<string, string>,
+): Promise<boolean> {
+  type Discard = { scope: string; label: string; reason: string };
+  const discards: Discard[] = [];
+  for (const page of pages) {
+    const pickedVariantId = variantPicks[page.id];
+    for (let i = 0; i < page.variants.length; i++) {
+      const v = page.variants[i];
+      if (v.id === pickedVariantId) continue;
+      if (i === 0) continue; // first variant has no discardReason convention
+      discards.push({
+        scope: page.label ?? page.id,
+        label: `Variant ${v.label ?? v.id}`,
+        reason: v.discardReason?.trim() || "(no reason recorded)",
+      });
+    }
+    const tweaks = [
+      ...(design.index.tweaks ?? []),
+      ...(page.tweaks ?? []),
+    ];
+    for (const t of tweaks) {
+      if (t.type !== "select" && t.type !== "toggle") continue;
+      discards.push({
+        scope: page.label ?? page.id,
+        label: `${t.type === "select" ? "Select" : "Toggle"} tweak "${t.label}"`,
+        reason: (t as { discardReason?: string }).discardReason?.trim() || "(no reason recorded)",
+      });
+    }
+  }
+  if (discards.length === 0) return true;
+  return new Promise<boolean>((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.setAttribute("data-od-finalize-confirm", "");
+    overlay.className = "od-modal-overlay";
+    const dialog = document.createElement("div");
+    dialog.className = "od-modal-dialog";
+    const heading = document.createElement("h2");
+    heading.textContent = "Confirm finalize";
+    dialog.appendChild(heading);
+    const intro = document.createElement("p");
+    intro.textContent =
+      "These alternatives drop from production when this design is integrated. Their recorded reasons:";
+    dialog.appendChild(intro);
+    const list = document.createElement("ul");
+    list.className = "od-discard-list";
+    for (const d of discards) {
+      const li = document.createElement("li");
+      const head = document.createElement("strong");
+      head.textContent = `${d.scope} – ${d.label}`;
+      const reason = document.createElement("div");
+      reason.className = "od-discard-reason";
+      reason.textContent = d.reason;
+      li.append(head, reason);
+      list.appendChild(li);
+    }
+    dialog.appendChild(list);
+    const actions = document.createElement("div");
+    actions.className = "od-modal-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => {
+      overlay.remove();
+      resolve(false);
+    });
+    const confirm = document.createElement("button");
+    confirm.type = "button";
+    confirm.className = "primary";
+    confirm.textContent = "Finalize";
+    confirm.addEventListener("click", () => {
+      overlay.remove();
+      resolve(true);
+    });
+    actions.append(cancel, confirm);
+    dialog.appendChild(actions);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    confirm.focus();
+  });
 }
 
 async function clearChosenPage(): Promise<void> {
@@ -1338,7 +1546,11 @@ function recomputeDivergence(): void {
   }
   const snapshot = currentSnapshot();
   const variantId = activeVariant?.id ?? null;
-  setDivergence(computeDivergence(surface, variantId, tweakValues, touchedTweakIds, snapshot));
+  const tweaks = collectTweaks(activeDesign?.index, activePage!, activeVariant!);
+  // Only compare the designer-decision keys; state values aren't part of
+  // approvals. partitionByType strips the `state` half off the active map.
+  const designerValues = partitionByType(tweaks, tweakValues).tweaks;
+  setDivergence(computeDivergence(tweaks, variantId, designerValues, snapshot));
 }
 
 function scheduleDivergenceRecompute(): void {
@@ -1447,14 +1659,11 @@ function renderSyncPanel(): void {
   const surfaceLabel = activePage?.label ?? activePage?.id ?? "surface";
   const tweakPhrase = total === 1 ? "1 tweak" : `${total} tweaks`;
   const tweakVerb = total === 1 ? "differs" : "differ";
-  const otherSurfaceCount = Math.max(0, (activeDS?.surfaces.length ?? 1) - 1);
-  const othersPhrase =
-    otherSurfaceCount === 0
-      ? "the design system's saved values"
-      : otherSurfaceCount === 1
-        ? "what the design system has saved for 1 other surface"
-        : `what the design system has saved for ${otherSurfaceCount} other surfaces`;
-  syncSubtitle.textContent = `${tweakPhrase} on ${surfaceLabel} ${tweakVerb} from ${othersPhrase}.`;
+  const dsName = activeDS?.name ?? "the design system";
+  // The comparison is "this surface's emitted CSS values vs the DS's
+  // tokens.css" – say so. The previous copy mentioned "N other surfaces"
+  // which was misleading: nothing in this panel reads other surfaces.
+  syncSubtitle.textContent = `${tweakPhrase} on ${surfaceLabel} ${tweakVerb} from \`${dsName}/tokens.css\`.`;
 
   syncList.innerHTML = "";
   for (const div of syncDivergences) {
@@ -1558,9 +1767,9 @@ function copyPromotePrompt(): void {
   const previewFile = surface.file || `${surface.id}.html`;
   const pageFile = activeVariant?.file || `${surface.id}.html`;
   const surfacePath =
-    surface.kind === "preview" ? `preview/${previewFile}` : `pages/${pageFile}`;
+    surface.kind === "tokens" ? `preview/${previewFile}` : `pages/${pageFile}`;
   const surfaceLabel =
-    surface.kind === "preview"
+    surface.kind === "tokens"
       ? `Tokens · ${surface.label}`
       : `Pages · ${surface.label}`;
   const ctx = { dsName: activeDS.name, surfaceLabel, surfacePath };
@@ -1630,6 +1839,15 @@ async function approveCurrentSurface(): Promise<void> {
   const surface = currentSurface();
   if (!surface) return;
   const isApproved = currentSnapshot() !== null && !divergence;
+  const tweaks = collectTweaks(activeDesign?.index, activePage!, activeVariant!);
+  // Filter to (a) keys the user touched – untouched tweaks expand to fallback
+  // defaults that would pollute approvals.json and break divergence checks if
+  // defaults ever change – and (b) non-state tweaks. State values are runtime
+  // conditions and don't belong in approvals.
+  const touchedDesignerTweaks = partitionByType(
+    tweaks,
+    filterToTouched(tweakValues, touchedTweakIds),
+  ).tweaks;
   const body = isApproved
     ? {
         action: "clear",
@@ -1641,11 +1859,7 @@ async function approveCurrentSurface(): Promise<void> {
         surfaceKind: surface.kind,
         surfaceId: surface.id,
         variantId: activeVariant?.id ?? null,
-        // Only persist tweaks the user actually touched – untouched tweaks
-        // expand to fallback defaults (e.g. "#000000" for colors) that would
-        // pollute approvals.json and break divergence checks if defaults
-        // ever change.
-        tweaks: filterToTouched(tweakValues, touchedTweakIds),
+        tweaks: touchedDesignerTweaks,
       };
   try {
     const r = await fetch(`${DATA_ROOT}/design-systems/${activeDS.name}/approvals`, {

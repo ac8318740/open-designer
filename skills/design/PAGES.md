@@ -4,11 +4,19 @@ A design has **pages**, each page has **variants**. This doc explains which is w
 
 ## The finalize-discard test
 
-Everything the viewer's tweaks panel exposes – **variants and tweaks** – is a designer decision. When the user clicks finalize, the unselected alternatives drop from the production design. The chosen variant + chosen tweak values are what `/design-integrate` ports to real code; the rest stays behind as draft.
+Every variant past the first AND every `select`/`toggle` tweak is a designer decision. When the user clicks finalize, the unselected alternatives drop from the production design. The chosen variant + chosen tweak values are what `/design-integrate` ports to real code; the rest stays behind as draft.
+
+Encode the test as data, not prose. In `index.json`:
+
+- Every variant past the first MUST set `discardReason: "<one sentence>"`.
+- Every `select`/`toggle` tweak MUST set `discardReason: "<one sentence>"`.
+- `state` tweaks are **exempt** – they're runtime conditions the production component dispatches on, not designer decisions.
+
+The viewer surfaces these reasons in the finalize confirmation modal so the user can see what's being discarded and why. Missing values produce a console warning this release; next release they'll be a hard error.
 
 Before adding a variant OR a `select`/`toggle` tweak, ask: **when the user finalizes, do the unselected options drop from production?**
 
-- **Yes** → variant (one direction wins) or tweak (one value wins).
+- **Yes** → variant (one direction wins) or tweak (one value wins). Set `discardReason`.
 - **No, production needs all options live at runtime** → **page**, state, or responsive treatment. Pages are linked with `data-od-page`; states are conditions of one screen rendered together.
 
 | Case | Drop from prod on finalize? | Therefore |
@@ -36,7 +44,9 @@ If two candidates both have the same content shape but differ in layout density,
 
 ## States and modes are not variants – or tweaks
 
-Loading, empty, errored, populated, streaming, diffed – these are **states within a variant**, rendered together so a DS's tokens are visible across state pressure. Do not create `log-loading`, `log-empty`, `log-populated` as sibling pages. Do not create `01-loading`, `02-errored`, `03-populated` as sibling variants either.
+Categorical runtime conditions are **states within a variant**, rendered together so a DS's tokens are visible across state pressure. Don't enumerate them in this doc – derive them from `briefing/components.md` and `briefing/extractable-components.md` for the page. Common shapes include populated/loading/empty/errored, but streaming, diffed, connecting, deploying, etc. all qualify when the page has them. See `SKILL.md` step 8 for the full state-deriving guidance and CSS pattern.
+
+Do not create `log-loading`, `log-empty`, `log-populated` as sibling pages. Do not create `01-loading`, `02-errored`, `03-populated` as sibling variants either.
 
 **Runtime modes** the user toggles between in production – view mode (cards/list/tree), sidebar shown/hidden, light/dark, user-toggleable density – fail the finalize-discard test for both variants AND tweaks: production needs every option at runtime, so finalize doesn't drop anything. They are **pages**: each mode is its own page entry; the segmented-control button that switches modes is a `data-od-page` link. The user (and the LLM) can see the navigation in the viewer rather than chasing a hidden tweak.
 

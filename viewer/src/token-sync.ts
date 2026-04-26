@@ -152,7 +152,7 @@ export function computeTokenDivergences(
       transform,
       rows,
       ...(transform !== "set" ? { scalar: raw } : {}),
-      ...(tweak.unit ? { unit: tweak.unit } : {}),
+      ...(tweak.type === "slider" && tweak.unit ? { unit: tweak.unit } : {}),
     });
   }
   return out;

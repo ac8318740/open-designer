@@ -33,6 +33,11 @@ compact summary (under 400 words) of:
    with file paths. Prioritize ones relevant to a <design name> design.
 6. Layouts, shells, and routes from the other briefing files – just the
    ones relevant to <design name>.
+7. State machines / hooks already in the codebase that match any
+   `state` entries on the chosen pages (loading/empty/errored/streaming
+   /etc.). Cite the file and the state names exposed. The integration
+   needs these so production components dispatch on real state
+   instead of having design states baked into :root overrides.
 
 Also flag anything in the bundle that seems stale (files referenced
 that no longer exist, tokens that the code no longer uses).

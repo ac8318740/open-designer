@@ -6,6 +6,8 @@
 
 import { join, normalize, sep } from "node:path";
 
+const SCHEMA_VERSION = 2;
+
 /**
  * Validate a name from a URL path. Rejects anything that could escape the
  * parent directory – dot-dot segments, path separators, and any character
@@ -42,15 +44,23 @@ export function safeJoin(root, relPath) {
 }
 
 /**
+ * Normalize a chosen entry from POST body or on-disk into a known shape.
+ * Accepts and preserves `state` (runtime conditions) as a sibling of
+ * `tweaks` (designer decisions) – see types.ts for the rationale.
+ *
  * @param {unknown} entry
- * @returns {{ variantId: string, tweaks: Record<string, unknown> }}
+ * @returns {{ variantId: string, tweaks: Record<string, unknown>, state?: Record<string, unknown> }}
  */
 export function sanitizeEntry(entry) {
   const e = entry && typeof entry === "object" ? /** @type {Record<string, unknown>} */ (entry) : {};
-  return {
+  const out = {
     variantId: String(e.variantId ?? ""),
     tweaks: e.tweaks && typeof e.tweaks === "object" ? /** @type {Record<string, unknown>} */ (e.tweaks) : {},
   };
+  if (e.state && typeof e.state === "object" && !Array.isArray(e.state)) {
+    out.state = /** @type {Record<string, unknown>} */ (e.state);
+  }
+  return out;
 }
 
 /**
@@ -58,26 +68,30 @@ export function sanitizeEntry(entry) {
  * the new pages-keyed shape so the merge logic only deals with one form.
  *
  * @param {unknown} existing
- * @returns {null | { finalizedAt: string, shippedAt?: string, pages: Record<string, { variantId: string, tweaks: Record<string, unknown> }> }}
+ * @returns {null | { finalizedAt: string, shippedAt?: string, pages: Record<string, ReturnType<typeof sanitizeEntry>> }}
  */
 export function normalizeChosen(existing) {
   if (!existing || typeof existing !== "object") return null;
   const obj = /** @type {Record<string, unknown>} */ (existing);
   if (obj.pages && typeof obj.pages === "object") {
+    const pages = /** @type {Record<string, ReturnType<typeof sanitizeEntry>>} */ ({});
+    for (const [pageId, entry] of Object.entries(/** @type {Record<string, unknown>} */ (obj.pages))) {
+      pages[pageId] = sanitizeEntry(entry);
+    }
     return {
       finalizedAt: String(obj.finalizedAt ?? new Date().toISOString()),
       ...(obj.shippedAt ? { shippedAt: String(obj.shippedAt) } : {}),
-      pages: { .../** @type {Record<string, any>} */ (obj.pages) },
+      pages,
     };
   }
   return {
     finalizedAt: String(obj.finalizedAt ?? new Date().toISOString()),
     ...(obj.shippedAt ? { shippedAt: String(obj.shippedAt) } : {}),
     pages: {
-      main: {
-        variantId: String(obj.variantId ?? ""),
-        tweaks: obj.tweaks && typeof obj.tweaks === "object" ? /** @type {Record<string, unknown>} */ (obj.tweaks) : {},
-      },
+      main: sanitizeEntry({
+        variantId: obj.variantId,
+        tweaks: obj.tweaks,
+      }),
     },
   };
 }
@@ -86,14 +100,16 @@ export function normalizeChosen(existing) {
  * Apply a finalize POST body against the existing chosen state.
  *
  * Accepted body shapes:
- *   { chosenPage: { pageId, entry: { variantId, tweaks } } }  – set one page
- *   { clearPage: pageId }                                     – clear one page
- *   { finalizeAll: { pages: { pageId: { variantId, tweaks } } } }  – replace
- *   { clearAll: true }                                        – drop chosen
- *   { chosen: {...} | null }                                  – legacy path,
- *     used by the integration skill to stamp shippedAt.
+ *   { chosenPage: { pageId, entry: { variantId, tweaks, state? } } }
+ *   { clearPage: pageId }
+ *   { finalizeAll: { pages: { pageId: { variantId, tweaks, state? } } } }
+ *   { clearAll: true }
+ *   { markShipped: <iso-string> }   – stamp shippedAt on existing chosen
  *
  * Returns { chosen } on success (chosen is null to clear), or { error }.
+ *
+ * The legacy `{ chosen: {...} | null }` write-side shape is gone. The viewer
+ * never sent it; design-integrate now uses `markShipped` to stamp shippedAt.
  *
  * @param {unknown} existing  The current `chosen` field from index.json.
  * @param {Record<string, unknown>} body  The parsed POST body.
@@ -127,7 +143,7 @@ export function applyFinalizeBody(existing, body) {
     if (!fa.pages || typeof fa.pages !== "object") {
       return { error: "finalizeAll requires pages map" };
     }
-    const pages = /** @type {Record<string, { variantId: string, tweaks: Record<string, unknown> }>} */ ({});
+    const pages = /** @type {Record<string, ReturnType<typeof sanitizeEntry>>} */ ({});
     for (const [pageId, entry] of Object.entries(fa.pages)) {
       pages[pageId] = sanitizeEntry(entry);
     }
@@ -142,35 +158,16 @@ export function applyFinalizeBody(existing, body) {
     };
   }
 
-  if ("chosen" in body) {
-    const c = body.chosen;
-    if (c === null) return { chosen: null };
-    if (!c || typeof c !== "object") return { error: "missing chosen" };
-    const obj = /** @type {Record<string, unknown>} */ (c);
-    if (obj.pages && typeof obj.pages === "object") {
-      const pages = /** @type {Record<string, { variantId: string, tweaks: Record<string, unknown> }>} */ ({});
-      for (const [pageId, entry] of Object.entries(/** @type {Record<string, unknown>} */ (obj.pages))) {
-        pages[pageId] = sanitizeEntry(entry);
-      }
-      return {
-        chosen: {
-          finalizedAt: String(obj.finalizedAt ?? now),
-          ...(obj.shippedAt ? { shippedAt: String(obj.shippedAt) } : {}),
-          pages,
-        },
-      };
-    }
-    const pageKey =
-      current && Object.keys(current.pages)[0]
-        ? Object.keys(current.pages)[0]
-        : "main";
+  if (body.markShipped !== undefined) {
+    if (!current) return { error: "markShipped requires an existing chosen block" };
+    const stamp =
+      typeof body.markShipped === "string" && body.markShipped.length > 0
+        ? body.markShipped
+        : now;
     return {
       chosen: {
-        finalizedAt: String(obj.finalizedAt ?? now),
-        ...(obj.shippedAt ? { shippedAt: String(obj.shippedAt) } : {}),
-        pages: {
-          [pageKey]: sanitizeEntry(obj),
-        },
+        ...current,
+        shippedAt: stamp,
       },
     };
   }
@@ -290,13 +287,25 @@ export function applyPromoteBody(currentCss, body) {
 
 // --- Surface approvals ----------------------------------------------------
 
+// Map a wire-protocol surfaceKind to the on-disk approval key prefix.
+// New clients send "tokens"; the legacy alias "preview" stays accepted so
+// any older tooling still works.
+function surfaceKeyPrefix(kind) {
+  if (kind === "page") return "pages";
+  if (kind === "tokens" || kind === "preview") return "tokens";
+  return null;
+}
+
 /**
  * Apply an approvals POST body against the existing approvals state. Returns
  * the merged approvals object on success, or an error message.
  *
  * Accepted body shapes:
- *   { action: "set", surfaceKind: "page"|"preview", surfaceId, variantId?, tweaks? }
- *   { action: "clear", surfaceKind: "page"|"preview", surfaceId }
+ *   { action: "set", surfaceKind: "page"|"tokens", surfaceId, variantId?, tweaks? }
+ *   { action: "clear", surfaceKind: "page"|"tokens", surfaceId }
+ *
+ * (The legacy alias "preview" for surfaceKind is still accepted on read so
+ * existing approvals.json files keep working.)
  *
  * @param {unknown} current
  * @param {Record<string, unknown>} body
@@ -307,13 +316,14 @@ export function applyApprovalsBody(current, body) {
     current && typeof current === "object" && /** @type {any} */ (current).surfaces
       ? { .../** @type {Record<string, unknown>} */ (/** @type {any} */ (current).surfaces) }
       : /** @type {Record<string, unknown>} */ ({});
-  const approvals = { schemaVersion: 1, surfaces };
+  const approvals = { schemaVersion: SCHEMA_VERSION, surfaces };
   const action = body?.action;
   const kind = body?.surfaceKind;
   const id = body?.surfaceId;
   if (!id || typeof id !== "string") return { error: "missing surfaceId" };
-  if (kind !== "page" && kind !== "preview") return { error: "invalid surfaceKind" };
-  const key = `${kind === "page" ? "pages" : "tokens"}/${id}`;
+  const prefix = surfaceKeyPrefix(kind);
+  if (!prefix) return { error: "invalid surfaceKind" };
+  const key = `${prefix}/${id}`;
   if (action === "clear") {
     delete approvals.surfaces[key];
     return { approvals };
@@ -343,3 +353,80 @@ export function titlecaseId(id) {
     .map((p) => p[0].toUpperCase() + p.slice(1))
     .join(" ");
 }
+
+// --- Schema validation ----------------------------------------------------
+
+/**
+ * Walk a parsed DesignIndex looking for missing finalize-discard fields.
+ * Returns a list of warning strings; the caller decides whether to surface
+ * them to the user. This is **warn-only this release** – the next release
+ * will upgrade these warnings into hard errors.
+ *
+ * @param {unknown} index
+ * @param {string} designName
+ * @returns {string[]}
+ */
+export function validateDesignIndex(index, designName) {
+  const warnings = [];
+  if (!index || typeof index !== "object") return warnings;
+  const obj = /** @type {Record<string, unknown>} */ (index);
+  const pages = Array.isArray(obj.pages) ? obj.pages : [];
+  for (const page of pages) {
+    if (!page || typeof page !== "object") continue;
+    const p = /** @type {Record<string, unknown>} */ (page);
+    const pageId = String(p.id ?? "");
+    // Variants past the first must declare discardReason.
+    const variants = Array.isArray(p.variants) ? p.variants : [];
+    for (let i = 1; i < variants.length; i++) {
+      const v = variants[i];
+      if (!v || typeof v !== "object") continue;
+      const variant = /** @type {Record<string, unknown>} */ (v);
+      const reason = variant.discardReason;
+      if (typeof reason !== "string" || reason.trim().length === 0) {
+        warnings.push(
+          `[${designName}] page "${pageId}" variant "${variant.id ?? `#${i}`}" is missing discardReason – the finalize-discard test should record why this variant drops from production when un-picked.`,
+        );
+      }
+    }
+    // select / toggle tweaks at every level (design / page / variant) need it.
+    const visit = (tweaks, scope) => {
+      if (!Array.isArray(tweaks)) return;
+      for (const t of tweaks) {
+        if (!t || typeof t !== "object") continue;
+        const tweak = /** @type {Record<string, unknown>} */ (t);
+        if (tweak.type !== "select" && tweak.type !== "toggle") continue;
+        const reason = tweak.discardReason;
+        if (typeof reason !== "string" || reason.trim().length === 0) {
+          warnings.push(
+            `[${designName}] ${scope} ${tweak.type} tweak "${tweak.id ?? "(unnamed)"}" is missing discardReason – the finalize-discard test should record why the un-picked options drop from production.`,
+          );
+        }
+      }
+    };
+    visit(p.tweaks, `page "${pageId}"`);
+    for (const v of variants) {
+      if (!v || typeof v !== "object") continue;
+      const variant = /** @type {Record<string, unknown>} */ (v);
+      visit(variant.tweaks, `page "${pageId}" variant "${variant.id ?? "?"}"`);
+    }
+  }
+  visitDesignTweaks(obj.tweaks, designName, warnings);
+  return warnings;
+}
+
+function visitDesignTweaks(tweaks, designName, warnings) {
+  if (!Array.isArray(tweaks)) return;
+  for (const t of tweaks) {
+    if (!t || typeof t !== "object") continue;
+    const tweak = /** @type {Record<string, unknown>} */ (t);
+    if (tweak.type !== "select" && tweak.type !== "toggle") continue;
+    const reason = tweak.discardReason;
+    if (typeof reason !== "string" || reason.trim().length === 0) {
+      warnings.push(
+        `[${designName}] design-level ${tweak.type} tweak "${tweak.id ?? "(unnamed)"}" is missing discardReason.`,
+      );
+    }
+  }
+}
+
+export const FINALIZE_SCHEMA_VERSION = SCHEMA_VERSION;

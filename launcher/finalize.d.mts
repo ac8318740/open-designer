@@ -1,6 +1,8 @@
 // Ambient types for the shared .mjs module. The runtime implementation lives
 // in finalize.mjs so the zero-dep launcher can import it without a build.
 
+export const FINALIZE_SCHEMA_VERSION: number;
+
 export function isValidDesignName(name: string): boolean;
 
 export function safeJoin(root: string, relPath: string): string | null;
@@ -8,6 +10,7 @@ export function safeJoin(root: string, relPath: string): string | null;
 export interface ChosenEntry {
   variantId: string;
   tweaks: Record<string, unknown>;
+  state?: Record<string, unknown>;
 }
 
 export interface ChosenBlock {
@@ -34,7 +37,9 @@ export function applyPromoteBody(
 
 export interface ApprovalsBody {
   action?: string;
-  surfaceKind?: string;
+  // "tokens" is the new wire-protocol value. "preview" is still accepted as
+  // a legacy alias on read.
+  surfaceKind?: "page" | "tokens" | "preview" | string;
   surfaceId?: string;
   variantId?: string | null;
   tweaks?: Record<string, string> | null;
@@ -51,3 +56,8 @@ export function applyApprovalsBody(
 ): { approvals?: ApprovalsState; error?: string };
 
 export function titlecaseId(id: string): string;
+
+export function validateDesignIndex(
+  index: unknown,
+  designName: string,
+): string[];

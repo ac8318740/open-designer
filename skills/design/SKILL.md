@@ -28,7 +28,7 @@ Before producing any design, list `.open-designer/design-systems/`. Three cases:
    - `Point at an existing one outside this repo` – the user may have a DS in a sibling repo; ask for the path and copy it in.
    - `Cancel` – stop. Designs cannot be produced without a DS.
 2. **One DS exists** – use it. Record its name as the active DS for this design.
-3. **Multiple DS exist** – check `.open-designer/config.json` for `defaultDesignSystem`. If set, use it. Otherwise ask which DS applies (`AskUserQuestion`, one option per DS plus a "cancel"). After the answer, offer: "Make `<name>` the default for new designs?" – if yes, write `config.json`.
+3. **Multiple DS exist** – check `.open-designer/config.json` for `defaultDesignSystem`. If set, use it (the viewer reads the same file and loads that DS first; falls back to the first DS alphabetically if unset). Otherwise ask which DS applies (`AskUserQuestion`, one option per DS plus a "cancel"). After the answer, offer: "Make `<name>` the default for new designs?" – if yes, write `config.json`.
 
 The chosen DS name lands in the new design's `index.json` as `designSystem: "<name>"`.
 
@@ -92,7 +92,15 @@ Every design has one or more **pages**; every page has one or more **variants**.
 
 **Rule of thumb**: if clicking something in the real app would change the URL or swap the main content region (tab switch, view-mode swap, list → detail), it's a different page. If it's the same screen laid out differently as a one-time direction the designer commits to, it's a variant.
 
-**The finalize-discard test (covers variants AND `select`/`toggle` tweaks)**: everything in the viewer's tweaks panel is a designer decision. When the user finalizes, the unselected alternatives drop from the production design. Before writing variant 2 or later, OR a `select`/`toggle` tweak, your reply MUST contain one line in this exact form: *"Finalize-discard test: when the user finalizes, do the unselected options drop from production? YES because [reason]."* If you can't write that line truthfully, the alternatives must stay live in production – so they are pages or states, not variants and not tweaks. Wire them with `data-od-page`.
+**The finalize-discard test (covers variants AND `select`/`toggle` tweaks)**: every variant past the first AND every `select`/`toggle` tweak is a designer decision. When the user finalizes, the unselected alternatives drop from the production design. Encode the reason as data, not prose: every non-first variant MUST set `discardReason` in `index.json`, and every `select`/`toggle` tweak MUST set `discardReason` too. The viewer reads these and shows them in the finalize confirmation modal. State tweaks are exempt – they're runtime conditions, not designer decisions. If you can't write a true `discardReason`, the alternatives must stay live in production – so they are pages or states, not variants and not tweaks. Wire them with `data-od-page`.
+
+```jsonc
+{
+  "id": "02-amber-cta",
+  "label": "Amber CTA",
+  "discardReason": "production picks one CTA treatment and ships it; this is the alt direction."
+}
+```
 
 See `PAGES.md` for the decision tree and worked examples.
 
@@ -175,24 +183,41 @@ For each request:
                }
              ]
            },
-           { "id": "02-compact", "file": "log/02-compact.html", "label": "Compact" }
+           {
+             "id": "02-compact",
+             "file": "log/02-compact.html",
+             "label": "Compact",
+             "discardReason": "production ships one density default; this is the alt direction."
+           }
          ]
        }
      ]
    }
    ```
 
-   Tweak types: `slider` (min, max, step, unit), `color` (hex), `select` (options as strings or `{label, value}`), `toggle` (`on`/`off` values), `state` (options as strings or `{label, value}` – flips `data-state` on `:root`, use `[data-state="errored"]` selectors in CSS), `text`. Merge order at render time: design → page → variant.
+   Tweak types: `slider` (min, max, step, unit), `color` (hex), `select` (options + `discardReason`), `toggle` (`on`/`off` + `discardReason`), `state` (options as strings or `{label, value}` – flips `data-state` on `:root`, use `[data-state="errored"]` selectors in CSS), `text`. Merge order at render time: design → page → variant.
 
    **Pick by the shape of the axis, not by habit:**
    - Continuous numeric range → `slider` (padding, radius, font size, shadow blur).
    - Open color choice → `color` (accent, surface, CTA bg).
    - Categorical preset, 3+ named options → `select` (corner style square/soft/pill, designer-chosen density default cozy/comfy/roomy where production locks the choice, any other designer-picked preset that ships as a single value). **Do NOT use `select` for runtime modes the user toggles in production**: view mode (cards/list/tree), sidebar shown/hidden, light/dark, user-toggleable density. Those fail the finalize-discard test (production needs all options live) and belong as sibling **pages**, wired with `data-od-page`. See `PAGES.md` worked example #6.
    - Binary on/off flip → `toggle` (show ornament, dark section, underline links, gradient background).
-   - Surface state switch → `state` (populated / loading / empty / errored). Unlike `select`, this writes the chosen value to a `data-state` attribute on the iframe root instead of a CSS custom property. The variant's HTML renders all states stacked by default; `data-state` on `:root` is a hook for showing one at a time.
+   - Categorical runtime conditions → `state` – derive from `briefing/components.md` and `briefing/extractable-components.md` for the page. Common shapes include populated/loading/empty/errored, but streaming, diffed, connecting, deploying, etc. all qualify when the page has them. Unlike `select`, this writes the chosen value to a `data-state` attribute on the iframe root instead of a CSS custom property. **The variant's HTML renders all states stacked by default**, with `[data-state="X"]` selectors hiding the others when one is filtered. Sketch in CSS:
+
+     ```css
+     /* Without data-state, every state-card renders. With data-state="loading",
+        only the loading card stays visible. */
+     :root[data-state="loading"] [data-state-card]:not([data-state-card="loading"]) { display: none; }
+     :root[data-state="errored"] [data-state-card]:not([data-state-card="errored"]) { display: none; }
+     /* …one rule per state. */
+     ```
+
+     The viewer warns in the console when a `state` tweak is declared but no `[data-state=…]` selector exists.
    - Free-form string → `text` (rare).
 
    The `target` is the CSS variable the control writes to (ignored for `state`, which always writes `data-state`). Keep variants as separate HTML files for structural differences; use tweaks for parametric adjustments.
+
+   `select` and `toggle` MUST set `discardReason: "<one short sentence>"` so the finalize confirmation modal can show why the un-picked options drop from production. `state` does not need one (it isn't a designer decision).
 
    **Legacy shape**: designs written before pages existed used a flat `drafts: []` array at the top level. The viewer still reads those, normalized to a single implicit `main` page. Do not write that shape.
 

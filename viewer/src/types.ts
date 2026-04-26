@@ -1,3 +1,27 @@
+// Open-designer viewer schema.
+//
+// Schema versioning
+// -----------------
+// Two on-disk shapes carry a `schemaVersion`:
+//   - DesignIndex (designs/<name>/index.json) – v2 introduces the
+//     `chosen.pages[*].state` sibling map next to `tweaks` and the
+//     `discardReason` field on select/toggle tweaks + non-first variants.
+//   - Approvals (design-systems/<ds>/approvals.json) – v2 (no on-disk
+//     shape change in v2 itself; bumped alongside DesignIndex so a single
+//     release line maps to one schema version).
+// Files without `schemaVersion` are treated as v1 and migrated in-memory
+// on read; the next write persists the v2 shape.
+//
+// Tweaks vs state
+// ---------------
+// A `select`/`toggle`/`slider`/`color`/`text` tweak is a designer
+// decision: a finalize commits one value and the others drop from
+// production (the finalize-discard test). A `state` "tweak" is *not* a
+// designer decision – it's a runtime condition (loading/empty/errored)
+// the production component must dispatch on. The on-disk shape keeps
+// state values in `chosen.pages[*].state`, separate from `tweaks`, so
+// approvals + integration treat the two distinctly.
+
 export interface TweakSelectOption {
   label: string;
   value: string;
@@ -11,9 +35,8 @@ export type TweakType = "select" | "color" | "slider" | "toggle" | "text" | "sta
 // - "scale": slider only. Each target = parseNumeric(tokensMap[target]) * value + unit.
 export type TweakTransform = "set" | "add" | "scale";
 
-export interface Tweak {
+interface TweakBase {
   id: string;
-  type: TweakType;
   label: string;
   // target + targets are mutually exclusive. Single-target `target` stays
   // supported for back-compat; multi-target previews use `targets`.
@@ -21,23 +44,65 @@ export interface Tweak {
   targets?: string[];
   transform?: TweakTransform;
   default?: string | number | boolean;
-  // select
-  options?: Array<string | TweakSelectOption>;
-  // slider
+}
+
+export interface SliderTweak extends TweakBase {
+  type: "slider";
   min?: number;
   max?: number;
   step?: number;
   unit?: string;
-  // toggle
+}
+
+export interface ColorTweak extends TweakBase {
+  type: "color";
+}
+
+export interface TextTweak extends TweakBase {
+  type: "text";
+}
+
+export interface SelectTweak extends TweakBase {
+  type: "select";
+  options?: Array<string | TweakSelectOption>;
+  // Why the un-picked alternatives drop from production at finalize time.
+  // Required by the finalize-discard test; missing values surface as a
+  // schema warning and are treated as empty until the author fills them.
+  discardReason: string;
+}
+
+export interface ToggleTweak extends TweakBase {
+  type: "toggle";
   on?: string;
   off?: string;
+  discardReason: string;
 }
+
+export interface StateTweak extends TweakBase {
+  type: "state";
+  options?: Array<string | TweakSelectOption>;
+  // No discardReason – state values are runtime conditions, not designer
+  // decisions, so the finalize-discard test does not apply.
+}
+
+export type Tweak =
+  | SliderTweak
+  | ColorTweak
+  | TextTweak
+  | SelectTweak
+  | ToggleTweak
+  | StateTweak;
 
 export interface VariantEntry {
   id: string;
   file: string;
   label?: string;
   tweaks?: Tweak[];
+  // Required on every variant past the first per page – the un-picked
+  // variants drop from production at finalize time, and the reason is
+  // surfaced in the finalize confirmation modal. Missing values warn at
+  // load time and are treated as empty.
+  discardReason?: string;
 }
 
 export interface Page {
@@ -49,7 +114,12 @@ export interface Page {
 
 export interface ChosenPage {
   variantId: string;
+  // Designer decisions snapshotted at finalize. select/toggle/slider/color/text.
   tweaks: Record<string, string>;
+  // Runtime conditions snapshotted at finalize. design-integrate must wire
+  // these to the production component's state machine, not bake them into
+  // :root overrides.
+  state?: Record<string, string>;
 }
 
 export interface Chosen {
@@ -59,6 +129,7 @@ export interface Chosen {
 }
 
 export interface DesignIndex {
+  schemaVersion?: number;
   design?: string;
   // Legacy `project` field kept so older index.json files still parse. New
   // designs write `design`. Read code should prefer `design ?? project`.
@@ -132,16 +203,20 @@ export type ViewerMode = "designs" | "design-systems";
 
 // A DS surface is either a playable page (under pages/) or a static token
 // demo (under preview/). Both are iframable, element-selectable, and
-// reviewable. Previews have no variants and no file-local tweaks.
-export type SurfaceKind = "page" | "preview";
+// reviewable. Tokens-kind surfaces have no variants and no file-local
+// tweaks unless the author opts in via preview/index.json. The on-disk
+// path stays `/preview/` – the kind is named "tokens" because that's
+// what the optgroup label and approval key already say, and because
+// authors think of these as token demos, not previews.
+export type SurfaceKind = "page" | "tokens";
 
 export interface Surface {
   kind: SurfaceKind;
   id: string;
   label: string;
   variants: VariantEntry[];
-  file?: string; // preview only – the default HTML file name
-  tweaks?: Tweak[]; // page-level tweaks (pages and now previews)
+  file?: string; // tokens only – the default HTML file name
+  tweaks?: Tweak[]; // page-level tweaks (pages and now tokens surfaces)
 }
 
 export interface Approval {
@@ -176,4 +251,10 @@ export interface SyncDivergence {
   // Raw slider value for add/scale (e.g. "4", "1.25"); undefined for "set".
   scalar?: string;
   unit?: string;
+}
+
+// Launcher config (.open-designer/config.json) ------------------------------
+
+export interface OpenDesignerConfig {
+  defaultDesignSystem?: string;
 }

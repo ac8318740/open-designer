@@ -16,6 +16,7 @@ import {
   isValidDesignName,
   safeJoin,
   titlecaseId,
+  validateDesignIndex,
 } from "./finalize.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
@@ -60,7 +61,9 @@ async function serveFile(res, absPath) {
 }
 
 // Synthesize /data/designs/index.json by listing design subdirectories.
-// Accepts the legacy /drafts/ path as a read-only alias.
+// Each design's index.json is read so schema warnings (missing
+// discardReason on select/toggle/non-first-variant) can be surfaced to the
+// viewer in `_warnings` for the user to act on.
 async function maybeServeDesignIndex(res, urlPath) {
   const isDesigns =
     urlPath === "/data/designs/index.json" || urlPath === "/data/designs/";
@@ -68,21 +71,35 @@ async function maybeServeDesignIndex(res, urlPath) {
   const root = join(DATA_ROOT, "designs");
   if (!existsSync(root)) {
     res.writeHead(200, { "Content-Type": MIME[".json"] });
-    res.end(JSON.stringify({ designs: [] }));
+    res.end(JSON.stringify({ designs: [], _warnings: [] }));
     return true;
   }
   const entries = await readdir(root, { withFileTypes: true });
   const names = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+  const warnings = [];
+  for (const name of names) {
+    const indexPath = join(root, name, "index.json");
+    if (!existsSync(indexPath)) continue;
+    try {
+      const raw = JSON.parse(await readFile(indexPath, "utf8"));
+      for (const w of validateDesignIndex(raw, name)) warnings.push(w);
+    } catch {
+      // Unreadable index – skip; the viewer surfaces the design separately.
+    }
+  }
+  for (const w of warnings) console.warn(w);
   res.writeHead(200, { "Content-Type": MIME[".json"], "Cache-Control": "no-store" });
-  res.end(JSON.stringify({ designs: names }));
+  res.end(JSON.stringify({ designs: names, _warnings: warnings }));
   return true;
 }
 
-// Serve /data/design-systems/<ds>/preview/index.json. If the DS author has
-// written an index.json on disk (with tweaks + variants), return it verbatim.
-// Otherwise synthesize a zero-tweak listing from *.html files. Files whose
-// stem starts with `_` are skipped so shared partials like `_preview.css`
-// don't show up as selectable surfaces.
+// Serve /data/design-systems/<ds>/preview/index.json. The on-disk path
+// stays `/preview/` for back-compat, even though the surface kind in the
+// viewer is now "tokens" – authors think of these as token demos. If the
+// DS author has written an index.json on disk (with tweaks + variants),
+// return it verbatim. Otherwise synthesize a zero-tweak listing from
+// *.html files. Files whose stem starts with `_` are skipped so shared
+// partials like `_preview.css` don't show up as selectable surfaces.
 async function maybeServePreviewIndex(res, urlPath) {
   const m = urlPath.match(/^\/data\/design-systems\/([^/]+)\/preview\/index\.json$/);
   if (!m) return false;
@@ -180,15 +197,18 @@ async function handleApprovals(req, res, dsName) {
 }
 
 // Synthesize /data/design-systems/index.json from the manifest of each DS.
+// Also surfaces `.open-designer/config.json` `defaultDesignSystem` so the
+// viewer knows which DS to load first when nothing is in localStorage.
 async function maybeServeDsIndex(res, urlPath) {
   const isDs =
     urlPath === "/data/design-systems/index.json" ||
     urlPath === "/data/design-systems/";
   if (!isDs) return false;
+  const config = await readConfig();
   const root = join(DATA_ROOT, "design-systems");
   if (!existsSync(root)) {
     res.writeHead(200, { "Content-Type": MIME[".json"] });
-    res.end(JSON.stringify({ designSystems: [] }));
+    res.end(JSON.stringify({ designSystems: [], defaultDesignSystem: config.defaultDesignSystem ?? null }));
     return true;
   }
   const entries = await readdir(root, { withFileTypes: true });
@@ -211,8 +231,23 @@ async function maybeServeDsIndex(res, urlPath) {
     }
   }
   res.writeHead(200, { "Content-Type": MIME[".json"], "Cache-Control": "no-store" });
-  res.end(JSON.stringify({ designSystems: out }));
+  res.end(JSON.stringify({
+    designSystems: out,
+    defaultDesignSystem: config.defaultDesignSystem ?? null,
+  }));
   return true;
+}
+
+async function readConfig() {
+  const path = join(DATA_ROOT, "config.json");
+  if (!existsSync(path)) return {};
+  try {
+    const parsed = JSON.parse(await readFile(path, "utf8"));
+    if (parsed && typeof parsed === "object") return parsed;
+  } catch (err) {
+    console.warn(`config.json unreadable: ${err.message}`);
+  }
+  return {};
 }
 
 async function readBody(req) {

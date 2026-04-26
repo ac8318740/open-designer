@@ -1056,3 +1056,101 @@ body.no-drafts #reset-btn {
 .od-toast.visible {
   opacity: 1;
 }
+
+/* Inspect (state) section in the tweaks panel ----------------------------- */
+.tweak-inspect-section {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+}
+.tweak-section-header {
+  margin: 0 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+.tweak-section-help {
+  margin: 0 0 10px;
+  font-size: 11px;
+  line-height: 1.4;
+  opacity: 0.6;
+}
+
+/* Finalize confirmation modal -------------------------------------------- */
+.od-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10100;
+}
+.od-modal-dialog {
+  background: var(--panel, #1a1a1a);
+  color: var(--text, #f5f5f5);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 10px;
+  padding: 20px 22px;
+  max-width: 520px;
+  width: calc(100% - 40px);
+  max-height: 80vh;
+  overflow: auto;
+  box-shadow: 0 30px 70px rgba(0, 0, 0, 0.5);
+}
+.od-modal-dialog h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.od-modal-dialog p {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  opacity: 0.85;
+}
+.od-discard-list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.od-discard-list li {
+  border-left: 2px solid var(--accent, #f59e0b);
+  padding: 4px 0 4px 12px;
+  font-size: 13px;
+}
+.od-discard-list strong {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.od-discard-reason {
+  font-size: 12px;
+  opacity: 0.75;
+  line-height: 1.4;
+}
+.od-modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.od-modal-actions button {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.15));
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+}
+.od-modal-actions button.primary {
+  background: var(--accent, #f59e0b);
+  color: #1f1300;
+  border-color: transparent;
+  font-weight: 600;
+}

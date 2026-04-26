@@ -11,7 +11,7 @@ This is the default. A DS exists (either already there or freshly created via `/
 5. Write `00-current.html` – a faithful replica of the current page using only DS tokens. This is the anchor.
 6. Write 2 to 4 variants. Each variant explores a different **direction** (layout density default, visual emphasis, brand voice). Variants are alternatives the user picks ONE of and discards the rest – not modes they toggle between in production. Apply the finalize-discard test in `PAGES.md` before adding variant N+1 OR a `select`/`toggle` tweak. Name by axis, not adjective: `01-tighter-spacing.html` beats `01-better.html`.
 
-   Before writing variant 2 or later, OR a `select`/`toggle` tweak, your reply MUST contain one line in this exact form: *"Finalize-discard test: when the user finalizes, do the unselected options drop from production? YES because [reason]."* If you can't write that line truthfully, the alternatives must stay live in production – so they are pages or states, not variants and not tweaks. Add them as sibling pages and wire the navigation with `data-od-page`.
+   Encode the finalize-discard test as data: every variant past the first AND every `select`/`toggle` tweak MUST set `discardReason: "<one sentence>"` in `index.json`. The viewer surfaces these reasons in the finalize confirmation modal. State tweaks are exempt (runtime conditions, not designer decisions). If you can't write a true `discardReason`, the alternatives must stay live in production – so they are pages or states, not variants and not tweaks. Add them as sibling pages and wire the navigation with `data-od-page`.
 7. Update `.open-designer/designs/<design-name>/index.json`. Record `designSystem: "<name>"`.
 8. Tell the user how to launch the viewer (one short sentence).
 
@@ -60,4 +60,4 @@ See `PAGES.md` for the page-vs-variant decision tree.
 
 - "Re-init" / "update the design system" – hand off to `/design-system` (edit flow). Do not rewrite DS files from this skill.
 - "Start over on this design" – delete the design folder and its entry, then write a fresh one.
-- "Forget the design system" – do not. If the user wants a different DS, run `/design-system` to create it (or switch `.open-designer/config.json:defaultDesignSystem`).
+- "Forget the design system" – do not. If the user wants a different DS, run `/design-system` to create it (or switch `.open-designer/config.json:defaultDesignSystem` – the viewer reads it on load and falls back to the first DS alphabetically if unset).
