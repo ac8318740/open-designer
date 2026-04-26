@@ -215,7 +215,7 @@ For each request:
      The viewer warns in the console when a `state` tweak is declared but no `[data-state=…]` selector exists.
    - Free-form string → `text` (rare).
 
-   The `target` is the CSS variable the control writes to (ignored for `state`, which always writes `data-state`). Keep variants as separate HTML files for structural differences; use tweaks for parametric adjustments.
+   The `target` is the CSS variable the control writes to (ignored for `state`, which always writes `data-state`). On top of `target`, every `select` / `toggle` / `state` tweak also exposes its current value as `data-{tweak.id}` on the iframe `<html>` element – use this when one option needs to switch a bundle of CSS values that a single variable can't carry, e.g. `:root[data-card-density="cozy"] { --card-padding: 12px; --card-gap: 10px; }`. Keep variants as separate HTML files for structural differences; use tweaks for parametric adjustments.
 
    `select` and `toggle` MUST set `discardReason: "<one short sentence>"` so the finalize confirmation modal can show why the un-picked options drop from production. `state` does not need one (it isn't a designer decision).
 

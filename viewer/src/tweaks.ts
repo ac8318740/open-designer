@@ -197,6 +197,13 @@ export function applyTweaksToIframe(
   let stateAttr: string | null = null;
   for (const t of tweaks) {
     const raw = values[t.id] ?? defaultFor(t);
+    // Discrete-valued tweaks also expose their value as data-{id} on <html>
+    // so designs can switch CSS bundles per option via attribute selectors
+    // (`:root[data-card-density="cozy"] { ... }`) without a JS shim. Slider
+    // / color / text are continuous and stay variable-only.
+    if (t.type === "select" || t.type === "toggle" || t.type === "state") {
+      doc.documentElement.setAttribute(`data-${t.id}`, cssValueFor(t, raw));
+    }
     if (t.type === "state") {
       stateAttr = cssValueFor(t, raw);
       continue;
