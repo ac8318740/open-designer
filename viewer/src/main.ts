@@ -373,8 +373,20 @@ function normalizeIndex(raw: DesignIndex): { index: NormalizedIndex; pages: Page
 // The migration is in-memory; it persists to disk on the next finalize POST.
 function migrateChosenStateSplit(page: Page, entry: ChosenPage): ChosenPage {
   const tweakTypes = new Map<string, string>();
-  for (const t of page.tweaks ?? []) tweakTypes.set(t.id, t.type);
-  for (const v of page.variants) for (const t of v.tweaks ?? []) tweakTypes.set(t.id, t.type);
+  // First option of each state tweak – used to rewrite the legacy "" sentinel
+  // (the old "unfiltered – stacked" value) into a real state value.
+  const stateFirstOption = new Map<string, string>();
+  const recordTweak = (t: Tweak): void => {
+    tweakTypes.set(t.id, t.type);
+    if (t.type === "state") {
+      const first = t.options?.[0];
+      if (first !== undefined) {
+        stateFirstOption.set(t.id, typeof first === "string" ? first : first.value);
+      }
+    }
+  };
+  for (const t of page.tweaks ?? []) recordTweak(t);
+  for (const v of page.variants) for (const t of v.tweaks ?? []) recordTweak(t);
   const tweaks: Record<string, string> = {};
   const state: Record<string, string> = { ...(entry.state ?? {}) };
   let migrated = false;
@@ -385,6 +397,16 @@ function migrateChosenStateSplit(page: Page, entry: ChosenPage): ChosenPage {
     } else {
       tweaks[k] = v;
     }
+  }
+  for (const [k, v] of Object.entries(state)) {
+    if (v !== "") continue;
+    const replacement = stateFirstOption.get(k);
+    if (replacement === undefined) {
+      delete state[k];
+    } else {
+      state[k] = replacement;
+    }
+    migrated = true;
   }
   if (!migrated && !entry.state) return entry;
   return {
@@ -884,7 +906,7 @@ function warnIfStateUnused(frame: HTMLIFrameElement, tweaks: Tweak[]): void {
   });
   if (!seen) {
     console.warn(
-      "[od] this surface declares a `state` tweak but no rule matches `[data-state=...]` – the variant won't filter. See SKILL.md step 8 for the CSS pattern.",
+      "[od] this surface declares a `state` tweak but no `[data-state=...]` selector exists in the variant's stylesheets – switching the dropdown will have no visible effect. See SKILL.md step 8 for the CSS pattern.",
     );
   }
 }

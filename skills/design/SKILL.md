@@ -111,7 +111,7 @@ For each request:
 1. Resolve the active DS chain and load the briefing (see above).
 2. Trace the imports of the target page or component to load the relevant code context. Stop at framework boundaries.
 3. Decide the **page set**: list the distinct screens the request covers. A single-page request is one page called e.g. `main`. A multi-page request (log + detail, tabs, wizard steps) gets one page entry per screen.
-4. For each page, write `00-current.html` (pixel-perfect replica of the current state, if any) plus 2 to 4 variants as `01-*.html`, `02-*.html`, etc. Use short slug names (`01-tighter-spacing.html`, `02-amber-cta.html`). When the page has state-revealing components in the briefing, each variant renders the stacked states on one surface (populated + loading + errored + empty) so the treatment can be judged across states – not only against the happy path.
+4. For each page, write `00-current.html` (pixel-perfect replica of the current state, if any) plus 2 to 4 variants as `01-*.html`, `02-*.html`, etc. Use short slug names (`01-tighter-spacing.html`, `02-amber-cta.html`). When the page has state-revealing components in the briefing, declare a `state` tweak listing those states and use selector-based hiding so the variant filters to one state at a time. The variant boots in the first listed state. See step 8.
 5. Each HTML file `<link>`s the DS tokens chain. Relative path from the design file:
 
    ```html
@@ -202,14 +202,14 @@ For each request:
    - Open color choice → `color` (accent, surface, CTA bg).
    - Categorical preset, 3+ named options → `select` (corner style square/soft/pill, designer-chosen density default cozy/comfy/roomy where production locks the choice, any other designer-picked preset that ships as a single value). **Do NOT use `select` for runtime modes the user toggles in production**: view mode (cards/list/tree), sidebar shown/hidden, light/dark, user-toggleable density. Those fail the finalize-discard test (production needs all options live) and belong as sibling **pages**, wired with `data-od-page`. See `PAGES.md` worked example #6.
    - Binary on/off flip → `toggle` (show ornament, dark section, underline links, gradient background).
-   - Categorical runtime conditions → `state` – derive from `briefing/components.md` and `briefing/extractable-components.md` for the page. Common shapes include populated/loading/empty/errored, but streaming, diffed, connecting, deploying, etc. all qualify when the page has them. Unlike `select`, this writes the chosen value to a `data-state` attribute on the iframe root instead of a CSS custom property. **The variant's HTML renders all states stacked by default**, with `[data-state="X"]` selectors hiding the others when one is filtered. Sketch in CSS:
+   - Categorical runtime conditions → `state` – derive from briefing for the page. Common shapes: populated/loading/empty/errored; streaming, diffed, connecting, deploying, etc. all qualify. Writes to `data-state` on `:root`. The variant boots in the first listed state and the dropdown switches between them. There is no unfiltered mode – every render shows exactly one named state. Sketch:
 
      ```css
-     /* Without data-state, every state-card renders. With data-state="loading",
-        only the loading card stays visible. */
-     :root[data-state="loading"] [data-state-card]:not([data-state-card="loading"]) { display: none; }
-     :root[data-state="errored"] [data-state-card]:not([data-state-card="errored"]) { display: none; }
-     /* …one rule per state. */
+     /* Each state-card declares its state; only the active one stays visible. */
+     :root[data-state="populated"] [data-state-card]:not([data-state-card="populated"]) { display: none; }
+     :root[data-state="loading"]   [data-state-card]:not([data-state-card="loading"])   { display: none; }
+     :root[data-state="errored"]   [data-state-card]:not([data-state-card="errored"])   { display: none; }
+     /* …one rule per declared state. */
      ```
 
      The viewer warns in the console when a `state` tweak is declared but no `[data-state=…]` selector exists.

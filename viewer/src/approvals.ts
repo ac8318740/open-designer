@@ -41,8 +41,24 @@ export async function loadApprovals(dsName: string): Promise<Approvals> {
     if (!j || typeof j !== "object" || !j.surfaces) {
       return { schemaVersion: 2, surfaces: {} };
     }
+    stripEmptyStateValues(j);
     return j;
   } catch {
     return { schemaVersion: 2, surfaces: {} };
+  }
+}
+
+// Pre-0.7.0 approvals could carry state keys in `tweaks` whose value was the
+// old "" sentinel ("unfiltered – stacked"). 0.7.0 partitioned state into its
+// own map, but stale snapshots still surface here. Drop them so divergence
+// math doesn't false-positive against the new first-option default. Persists
+// on the next approval write.
+function stripEmptyStateValues(approvals: Approvals): void {
+  for (const surface of Object.values(approvals.surfaces)) {
+    const t = surface.tweaks;
+    if (!t) continue;
+    for (const [k, v] of Object.entries(t)) {
+      if (v === "") delete t[k];
+    }
   }
 }

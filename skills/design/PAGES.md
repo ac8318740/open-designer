@@ -44,13 +44,13 @@ If two candidates both have the same content shape but differ in layout density,
 
 ## States and modes are not variants – or tweaks
 
-Categorical runtime conditions are **states within a variant**, rendered together so a DS's tokens are visible across state pressure. Don't enumerate them in this doc – derive them from `briefing/components.md` and `briefing/extractable-components.md` for the page. Common shapes include populated/loading/empty/errored, but streaming, diffed, connecting, deploying, etc. all qualify when the page has them. See `SKILL.md` step 8 for the full state-deriving guidance and CSS pattern.
+Categorical runtime conditions are **states within a variant**, switched one at a time via the `state` tweak. Don't enumerate them in this doc – derive them from `briefing/components.md` and `briefing/extractable-components.md` for the page. Common shapes include populated/loading/empty/errored, but streaming, diffed, connecting, deploying, etc. all qualify when the page has them. See `SKILL.md` step 8 for the CSS pattern.
 
 Do not create `log-loading`, `log-empty`, `log-populated` as sibling pages. Do not create `01-loading`, `02-errored`, `03-populated` as sibling variants either.
 
 **Runtime modes** the user toggles between in production – view mode (cards/list/tree), sidebar shown/hidden, light/dark, user-toggleable density – fail the finalize-discard test for both variants AND tweaks: production needs every option at runtime, so finalize doesn't drop anything. They are **pages**: each mode is its own page entry; the segmented-control button that switches modes is a `data-od-page` link. The user (and the LLM) can see the navigation in the viewer rather than chasing a hidden tweak.
 
-A variant renders the interesting states **on one surface at once** – a populated row sitting next to a skeleton row sitting next to an errored row. That's what makes a DS's tokens visible across state pressure. If the user needs to step through states one at a time in the viewer, use the `state` tweak (see `SKILL.md` step 8) – it flips `data-state` on the iframe root without duplicating files.
+If the user needs to step through states one at a time in the viewer, declare a `state` tweak (see `SKILL.md` step 8) – it flips `data-state` on the iframe root, the variant boots in the first listed state, and selector-based hiding shows one state at a time.
 
 ## Worked examples
 

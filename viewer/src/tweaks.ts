@@ -79,11 +79,6 @@ function resolveSelectValue(tweak: WithOptions, raw: string): string {
   return raw;
 }
 
-// `state` tweaks default to "(unfiltered)" – the iframe root has no
-// `data-state` attribute and the variant renders all states stacked. Other
-// tweaks fall back to declared defaults or type-specific placeholders.
-export const STATE_UNFILTERED = "";
-
 export function defaultFor(tweak: Tweak): string {
   if (tweak.default !== undefined) return String(tweak.default);
   switch (tweak.type) {
@@ -93,13 +88,12 @@ export function defaultFor(tweak: Tweak): string {
       return String(tweak.min ?? 0);
     case "color":
       return "#000000";
-    case "select": {
+    case "select":
+    case "state": {
       const first = tweak.options?.[0];
       if (first === undefined) return "";
       return typeof first === "string" ? first : first.value;
     }
-    case "state":
-      return STATE_UNFILTERED;
     default:
       return "";
   }
@@ -198,17 +192,13 @@ export function applyTweaksToIframe(
   const doc = iframe.contentDocument;
   if (!doc) return;
   const cssParts: string[] = [];
-  // Track whether *any* state tweak is set so we can decide between setting
-  // and removing the data-state attribute. If multiple state tweaks exist
-  // (rare), the last non-empty wins – the docs only commit to one at a time.
+  // If multiple state tweaks exist (rare), the last one wins – the docs only
+  // commit to one at a time.
   let stateAttr: string | null = null;
-  let sawStateTweak = false;
   for (const t of tweaks) {
     const raw = values[t.id] ?? defaultFor(t);
     if (t.type === "state") {
-      sawStateTweak = true;
-      const resolved = cssValueFor(t, raw);
-      if (resolved !== "") stateAttr = resolved;
+      stateAttr = cssValueFor(t, raw);
       continue;
     }
     for (const target of resolvedTargets(t)) {
@@ -217,13 +207,7 @@ export function applyTweaksToIframe(
       cssParts.push(`${target}: ${emitted};`);
     }
   }
-  if (sawStateTweak) {
-    if (stateAttr === null) {
-      doc.documentElement.removeAttribute("data-state");
-    } else {
-      doc.documentElement.setAttribute("data-state", stateAttr);
-    }
-  }
+  if (stateAttr !== null) doc.documentElement.setAttribute("data-state", stateAttr);
   let style = doc.getElementById(TWEAKS_STYLE_ID) as HTMLStyleElement | null;
   if (!style) {
     style = doc.createElement("style");
@@ -324,7 +308,7 @@ export function renderTweaksPanel(args: {
       const help = document.createElement("p");
       help.className = "tweak-section-help";
       help.textContent =
-        "Filter to one state at a time, or leave unset to see them stacked. Not a designer decision – production wires these to its state machine.";
+        "Filter to one state at a time – the variant boots in the first state and you switch by picking another. Not a designer decision; production wires this to its state machine.";
       section.appendChild(help);
       for (const tweak of stateTweaks) {
         section.appendChild(
@@ -435,18 +419,6 @@ function renderTweak(
     case "state": {
       const select = document.createElement("select");
       select.id = `tweak-${tweak.id}`;
-      // State tweaks get an explicit "(unfiltered)" option at the top –
-      // value "" means "no data-state attribute on root, render all
-      // stacked." Without this option, switching back from a filtered
-      // state required clicking elsewhere; making it explicit removes
-      // the workaround.
-      if (tweak.type === "state") {
-        const unfiltered = document.createElement("option");
-        unfiltered.value = STATE_UNFILTERED;
-        unfiltered.textContent = "(unfiltered – stacked)";
-        if (value === STATE_UNFILTERED) unfiltered.selected = true;
-        select.appendChild(unfiltered);
-      }
       for (const opt of tweak.options ?? []) {
         const option = document.createElement("option");
         if (typeof opt === "string") {
