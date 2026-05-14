@@ -97,14 +97,13 @@ For brownfield, prefer templates that match real routes in `briefing/routes.md`.
 
 ## Tweaks on playable pages
 
-Playable pages **can** declare tweaks in `index.json` the same way designs do. The difference:
+Every playable page declares tweaks – they're the whole point of DS mode. The user dials a value on a real surface, clicks **Promote**, and the new value lands in `tokens.css` `:root` for the matching `--<prefix>-*` variable. Without Promote, tweaks are local to the DS and don't cascade to designs. A playable with zero tweaks is just a screenshot.
 
-- In DS mode, each tweak gets a **Promote** button in the tweaks panel. Click = write the tweak's current value to `tokens.css` `:root` for the matching `--<prefix>-*` variable. Then the tweak UI stays bound to the new default.
-- Without Promote, tweaks are local to the DS – they don't cascade to designs.
+Pick from the same canonical menu as preview cards (see `CREATE.md` §2b.6): Brand accent, Density, Roundness, body font. Aim for 2–3 per page – the axes the surface visibly exercises. Brand accent fits every page; density fits anything with rhythm (cards, tables, forms); roundness fits anything with shaped containers; body font fits content-heavy pages.
 
-The `state` tweak type (see `design/SKILL.md` step 8) is useful on playables that render stacked states: it flips a `data-state` attribute on the iframe root so the user can switch between states without duplicating HTML files.
+Only skip an axis when the DS doesn't have the underlying token (e.g. no radius tweak if the DS uses Tailwind defaults with no `--<prefix>-radius-*` tokens). Don't invent a tweak whose target token doesn't exist – that's the only "noise" case worth avoiding.
 
-Declare tweaks sparingly in playable pages. A tweak that doesn't map to a real DS token is noise – use it only when you're intentionally proposing a new token value the user might want to promote.
+Schema is the same as designs (see `design/SKILL.md` step 8). The `state` tweak type is also useful on playables that render stacked states: it flips a `data-state` attribute on the iframe root so the user can switch between states without duplicating HTML files.
 
 ## Flexible page count
 

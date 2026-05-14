@@ -376,7 +376,7 @@ Pick 2–3 real routes from `routes.md` that together exercise the breadth of th
 
 When you emit two or more playables, link them with `data-od-page="<otherPageId>"` so the user can navigate between them inside the viewer – every playable should reach at least one sibling.
 
-Each page uses only DS tokens and components from `briefing/components.md`. Each page must render the stacked states derived from briefing evidence per `PAGES.md` – one surface showing the interesting states side-by-side (running + errored + empty, etc.), not a single happy-path state. Each page must also meet the interactivity rubric in `PAGES.md` so the surface feels alive when the user clicks into it.
+Each page uses only DS tokens and components from `briefing/components.md`. Each page must render the stacked states derived from briefing evidence per `PAGES.md` – one surface showing the interesting states side-by-side (running + errored + empty, etc.), not a single happy-path state. Each page must also meet the interactivity rubric in `PAGES.md` so the surface feels alive when the user clicks into it. Each page also declares 2–3 tweaks per `PAGES.md` §"Tweaks on playable pages" – pick from the canonical menu (Brand accent, Density, Roundness, body font) based on what the surface visibly exercises, so the user can dial values and Promote them into `tokens.css`.
 
 If `routes.md` only supports one meaningful surface, ship one – honest shallowness beats fabricated depth. Skip the sibling-link rule in this case. Note the reason in `gaps.md`.
 
