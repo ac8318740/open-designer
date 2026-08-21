@@ -6,10 +6,9 @@
   "author": "ac8318740",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ac8318740/ac8318740-plugins.git",
-    "directory": "plugins/open-designer"
+    "url": "git+https://github.com/ac8318740/open-designer.git"
   },
-  "homepage": "https://github.com/ac8318740/ac8318740-plugins/tree/main/plugins/open-designer",
+  "homepage": "https://github.com/ac8318740/open-designer",
   "keywords": [
     "design",
     "design-system",

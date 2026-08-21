@@ -2,7 +2,7 @@
 
 `open-designer` ships in two places that must stay in lock-step:
 
-1. **Claude Code plugin** – via the `ac8318740-plugins` marketplace. Users get it by installing the plugin.
+1. **Claude Code plugin** – via the `ac-agentic-coding` marketplace. Users get it by installing the plugin.
 2. **npm package** – `open-designer` on the public registry. Users run `npx open-designer` from their repo root to launch the viewer.
 
 If you bump the plugin version and forget to republish to npm, `npx open-designer` stays on the old version. Always do both together.
@@ -13,7 +13,7 @@ The version lives in **`.claude-plugin/plugin.json`**. `package.json` is synced 
 
 ## Release steps
 
-From `plugins/open-designer/`:
+From the repository root:
 
 1. Bump `version` in `.claude-plugin/plugin.json`.
 2. Run `npm run release`.
@@ -40,4 +40,4 @@ Viewer source, node_modules, and dev configs are excluded.
 
 ## Sanity check before publishing
 
-`npm pack --dry-run` from `plugins/open-designer/` prints the exact file list that will go to npm.
+`npm pack --dry-run` from the repository root prints the exact file list that will go to npm.

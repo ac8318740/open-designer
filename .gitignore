@@ -1,0 +1,18 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+
+# Test data written while exercising the plugin locally
+.open-designer/
+
+# Viewer build artifacts, rebuilt by the launcher and by npm run build
+viewer/dist/
+viewer/package-lock.json
+viewer/.vite/
+
+# npm release artifacts. .npmrc.release can hold an auth token - never commit it.
+.npmrc.release
+*.tgz

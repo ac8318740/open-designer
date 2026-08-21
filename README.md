@@ -15,7 +15,7 @@ No hosted backend. No API key billed by a third party. No cloud canvas. Just fil
 
 ## Install
 
-This plugin ships through the `ac8318740-plugins` marketplace. After adding the marketplace to Claude Code, install it with the standard plugin install flow.
+This plugin ships through the `ac-agentic-coding` marketplace. After adding the marketplace to Claude Code, install it with the standard plugin install flow.
 
 ## Use
 
