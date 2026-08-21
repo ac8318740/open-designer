@@ -40,8 +40,7 @@ process.on("exit", cleanup);
 process.on("SIGINT", () => { cleanup(); process.exit(130); });
 
 run("node", ["scripts/sync-version.mjs"]);
-run("npm", ["--prefix", "viewer", "install", "--no-audit", "--no-fund"]);
-run("npm", ["--prefix", "viewer", "run", "build"]);
+run("npm", ["run", "build:viewer"]);
 
 const publishArgs = ["publish", "--access", "public"];
 if (process.env.NPM_TOKEN) {

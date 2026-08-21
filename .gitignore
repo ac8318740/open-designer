@@ -10,7 +10,6 @@ node_modules/
 
 # Viewer build artifacts, rebuilt by the launcher and by npm run build
 viewer/dist/
-viewer/package-lock.json
 viewer/.vite/
 
 # npm release artifacts. .npmrc.release can hold an auth token - never commit it.

@@ -1,0 +1,61 @@
+name: Release
+
+# Publishes to npm with trusted publishing (OIDC). No npm token is involved:
+# GitHub mints a short-lived credential for this specific workflow, and npm
+# accepts it because the package names this repo and this filename as a trusted
+# publisher. Renaming this file breaks publishing until the publisher config on
+# npmjs.com is updated to match.
+#
+# Triggered by pushing a tag: git tag v0.7.4 && git push origin v0.7.4
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing needs npm 11.5.1 or later. The runner's bundled npm
+      # trails that, so pin it rather than depending on the image.
+      - name: Use an npm that supports trusted publishing
+        run: |
+          npm install -g npm@11
+          npm --version
+
+      # The tag is the release's claim about what is being shipped. If it
+      # disagrees with the manifest, one of them is wrong, and finding out
+      # after publishing is too late - npm versions are immutable.
+      - name: Tag matches the plugin manifest
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          manifest=$(node -p "require('./.claude-plugin/plugin.json').version")
+          tag="${GITHUB_REF_NAME#v}"
+          echo "manifest=$manifest tag=$tag"
+          if [ "$manifest" != "$tag" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match plugin.json $manifest"
+            exit 1
+          fi
+
+      # package.json's version is synced from plugin.json. Sync here rather
+      # than relying on prepublishOnly: npm reads package.json into memory
+      # before hooks run, so a sync inside the hook cannot change what ships.
+      - name: Sync version from the plugin manifest
+        run: npm run sync-version
+
+      # prepublishOnly verifies the version sync and builds the viewer from the
+      # committed lockfile. No token: OIDC supplies the credential.
+      - run: npm publish --access public
