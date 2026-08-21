@@ -1,6 +1,6 @@
 {
   "name": "open-designer-viewer",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "description": "Local design loop – Claude writes HTML designs against a first-class design system, you click elements in a viewer to iterate.",
   "license": "MIT",
   "author": "ac8318740",
@@ -36,7 +36,7 @@
   "scripts": {
     "sync-version": "node scripts/sync-version.mjs",
     "build:viewer": "npm --prefix viewer install --no-audit --no-fund && npm --prefix viewer run build",
-    "prepublishOnly": "npm run sync-version && npm run build:viewer",
+    "prepublishOnly": "node scripts/sync-version.mjs --check && npm run build:viewer",
     "release": "node scripts/release.mjs"
   }
 }
