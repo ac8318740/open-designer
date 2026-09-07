@@ -32,6 +32,24 @@ Before producing any design, list `.open-designer/design-systems/`. Three cases:
 
 The chosen DS name lands in the new design's `index.json` as `designSystem: "<name>"`.
 
+### Re-import check – the active DS may be older than `DESIGN.md`
+
+A DS built from `DESIGN.md` goes stale when someone edits a token in the code. Run this check once case 2 or case 3 has chosen the active DS. Case 1 just built the DS, so skip it there.
+
+1. Read the DS's `manifest.json`. A manifest with no `tokensSource: "DESIGN.md"` never imported its tokens. Make no offer, and carry on with the chosen DS.
+2. Find `DESIGN.md` – the project root, then `.agents/context/`, then `docs/`. This is the lookup in `CREATE.md` §2b.0 of the `design-system` skill.
+3. Compare the timestamps. Make no offer unless `DESIGN.md` or `.impeccable/design.json` carries an mtime newer than `manifest.importedAt`.
+4. Check for an unshipped promote. The DS holds an unshipped promote in two cases:
+    - `manifest.promotedAt` exists and `manifest.shippedAt` does not.
+    - `manifest.promotedAt` is newer than `manifest.shippedAt`.
+
+    Make no offer in either case. Say in one line that `DESIGN.md` has moved on, and that `/design-integrate` re-ships the promote first.
+5. Offer the re-import with `AskUserQuestion`, `header: "Design system"`:
+    - `Re-import tokens from DESIGN.md now (recommended)` – hand off to the design-system skill, wait for it to finish, then resume.
+    - `Design against the current tokens` – carry on, and note in one line that the DS is older than `DESIGN.md`.
+
+Never rewrite `tokens.css` from this skill. The design-system skill's edit flow owns the re-import (`EDIT.md`, Shape 4).
+
 ## How this skill LEVERAGES the design system
 
 The DS is not a decoration. Every draft and every edit re-reads it, and the authoring rules below enforce that tokens and voice come from the DS, not from invention.

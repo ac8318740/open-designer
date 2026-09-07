@@ -201,6 +201,14 @@ On a hit, append a `gaps.md` entry: `DESIGN.md` carries no dark-mode values, so 
 }
 ```
 
+**The manifest records the import.** Write three fields into `manifest.json`:
+
+- `tokensSource: "DESIGN.md"`.
+- `importedAt` – the current ISO timestamp.
+- `importedProperties` – the custom property names this sub-step wrote, in file order.
+
+The edit flow reads all three in `EDIT.md` Shape 4 when it re-imports the tokens. The list in `importedProperties` names the properties that re-import owns, so a hand-added token stays hand-added.
+
 **`theme.md` becomes a pointer.** The 2b.1 bullet writes a short doc instead of a second copy of the tokens. It carries three things and no fourth:
 
 - One line saying `DESIGN.md` is the token source.
@@ -550,11 +558,16 @@ Document the override surface: at the top of the child's `tokens.css`, list the 
   "description": "LightNote marketing surface",
   "extends": "lightnote",
   "createdAt": "2026-04-22T14:00:00Z",
-  "updatedAt": "2026-04-22T14:00:00Z"
+  "updatedAt": "2026-04-22T14:00:00Z",
+  "tokensSource": "DESIGN.md",
+  "importedAt": "2026-04-22T14:00:00Z",
+  "importedProperties": ["--lightnote-primary", "--lightnote-space-md"]
 }
 ```
 
-`shippedAt`, `shippedTo`, and `shippedTokens` are written only by `/design-integrate`. Do not set them here.
+2b.3b writes `tokensSource`, `importedAt`, and `importedProperties` when it imports the tokens from `DESIGN.md`. 2b.3a and the greenfield branch write none of them.
+
+`shippedAt`, `shippedTo`, and `shippedTokens` are written only by `/design-integrate`. The launcher's Promote handler writes `promotedAt`. Do not set them here.
 
 ## After emit
 

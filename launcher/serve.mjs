@@ -14,6 +14,7 @@ import {
   applyFinalizeBody,
   applyPromoteBody,
   isValidDesignName,
+  stampPromote,
   safeJoin,
   titlecaseId,
   validateDesignIndex,
@@ -335,12 +336,12 @@ async function handlePromote(req, res, ds) {
       return res.end(patched.error);
     }
     await atomicWrite(tokensPath, patched.css);
-    // Bump manifest.updatedAt.
+    // Stamp manifest.promotedAt and manifest.updatedAt.
     if (existsSync(manifestPath)) {
       try {
         const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-        manifest.updatedAt = new Date().toISOString();
-        await atomicWrite(manifestPath, JSON.stringify(manifest, null, 2));
+        const stamped = stampPromote(manifest, new Date().toISOString());
+        await atomicWrite(manifestPath, JSON.stringify(stamped, null, 2));
       } catch (err) {
         console.warn(`Promote: failed to bump manifest: ${err.message}`);
       }

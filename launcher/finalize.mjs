@@ -285,6 +285,19 @@ export function applyPromoteBody(currentCss, body) {
   }
 }
 
+/**
+ * Stamp a design system manifest as promoted. Returns a new object; the input
+ * is left alone. `promotedAt` is what the skills read to tell a promote apart
+ * from any other edit that bumps `updatedAt`.
+ *
+ * @param {Record<string, unknown>} manifest
+ * @param {string} now ISO timestamp
+ * @returns {Record<string, unknown>}
+ */
+export function stampPromote(manifest, now) {
+  return { ...manifest, updatedAt: now, promotedAt: now };
+}
+
 // --- Surface approvals ----------------------------------------------------
 
 // Map a wire-protocol surfaceKind to the on-disk approval key prefix.

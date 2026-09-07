@@ -181,6 +181,10 @@ export interface DesignSystemManifest {
   extends?: string;
   createdAt?: string;
   updatedAt?: string;
+  promotedAt?: string;
+  tokensSource?: string;
+  importedAt?: string;
+  importedProperties?: string[];
   shippedAt?: string;
   shippedTo?: string;
   shippedTokens?: string;
