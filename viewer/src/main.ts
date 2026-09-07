@@ -132,6 +132,8 @@ const pageHistory: Array<{ pageId: string; variantId: string }> = [];
 // Used by the refresh button and hot reload; navigation leaves it unset so
 // the same-document short-circuit in selectVariant still avoids flicker.
 interface NavOpts { fade?: boolean; reload?: boolean }
+// Scroll offset captured by a same-document reload that is still loading.
+let reloadScroll: { x: number; y: number } | null = null;
 
 // DOM refs ------------------------------------------------------------------
 
@@ -891,10 +893,14 @@ function selectVariant(variant: VariantEntry, opts: NavOpts = {}): void {
   // Reloading the same document (refresh button, hot reload) keeps the
   // reader's place: capture the scroll offset now and restore it once the
   // new document has laid out. Setting `src` to its current value is what
-  // forces the re-fetch.
+  // forces the re-fetch. If a reload is already in flight the window shows
+  // the transient blank document at (0, 0), so reuse the offset captured
+  // when that reload started.
+  const win = iframe.contentWindow;
   const keepScroll = sameDoc && opts.reload
-    ? { x: iframe.contentWindow?.scrollX ?? 0, y: iframe.contentWindow?.scrollY ?? 0 }
+    ? (reloadScroll ?? (win ? { x: win.scrollX, y: win.scrollY } : null))
     : null;
+  reloadScroll = keepScroll;
   iframe.classList.add("fading");
   iframe.src = nextUrl;
   picker.clearAll();
@@ -923,6 +929,7 @@ function selectVariant(variant: VariantEntry, opts: NavOpts = {}): void {
       requestAnimationFrame(() => {
         // Stylesheets can change the page height – restore again after layout.
         if (keepScroll) iframe.contentWindow?.scrollTo(keepScroll.x, keepScroll.y);
+        reloadScroll = null;
         syncIframeBackground(iframe);
         iframe.classList.remove("fading");
         warnIfStateUnused(iframe, tweaks);
