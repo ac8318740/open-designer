@@ -16,6 +16,7 @@ import {
   isValidDesignName,
   stampPromote,
   safeJoin,
+  shouldIgnoreFilename,
   titlecaseId,
   validateDesignIndex,
 } from "./finalize.mjs";
@@ -364,16 +365,16 @@ const sseClients = new Set();
 const debounceTimers = new Map();
 const DEBOUNCE_MS = 75;
 const HEARTBEAT_MS = 20000;
-let manualWatchers = null; // Map<absDir, FSWatcher> when the recursive flag isn't supported.
+let manualWatchers = null; // Map<absDir, FSWatcher> when watching per directory.
 
-function shouldIgnoreFilename(name) {
-  if (!name) return true;
-  if (name.endsWith(".tmp")) return true;
-  if (name === ".DS_Store") return true;
-  if (name.endsWith(".swp") || name.endsWith(".swo")) return true;
-  if (name.endsWith("~")) return true;
-  return false;
-}
+// On Linux, Node's `fs.watch(dir, { recursive: true })` is a JS polyfill that
+// watches each file by inode. Once a file is replaced by rename – how Claude's
+// Write tool, sed -i, and most editors save – the polyfill keeps watching the
+// dead inode and never reports that file again (verified on Node 22.23).
+// One inotify watch per directory reports every entry change reliably, so
+// Linux always uses the per-directory watcher. macOS and Windows have native
+// recursive watchers and keep using them.
+const USE_PER_DIRECTORY_WATCHER = process.platform === "linux";
 
 function broadcastChange(relPath) {
   const payload = `event: data-changed\ndata: ${JSON.stringify({ path: relPath })}\n\n`;
@@ -407,6 +408,7 @@ function handleWatchEvent(absPath) {
 }
 
 function startManualWatcher() {
+  stopManualWatcher();
   manualWatchers = new Map();
   const addDir = (dir) => {
     if (manualWatchers.has(dir)) return;
@@ -417,7 +419,7 @@ function startManualWatcher() {
         try {
           const s = statSync(abs);
           if (s.isDirectory() && !manualWatchers.has(abs)) {
-            walkAndAdd(abs);
+            walkAndAdd(abs, { announce: true });
           }
         } catch {
           const prev = manualWatchers.get(abs);
@@ -431,13 +433,21 @@ function startManualWatcher() {
       w.on("error", () => {
         try { w.close(); } catch { /* ignore */ }
         manualWatchers.delete(dir);
+        // Losing the root (e.g. `.open-designer` deleted and recreated) would
+        // otherwise end hot reload for the session. Re-attach like the
+        // recursive branch does.
+        if (dir === DATA_ROOT) setTimeout(attachWatcher, 2000);
       });
       manualWatchers.set(dir, w);
     } catch {
       /* directory vanished between read and watch – ignore */
     }
   };
-  const walkAndAdd = (dir) => {
+  // `announce` reports the files a newly created directory already holds.
+  // A new design's first file lands in the same tick as its mkdir, before
+  // this watcher is attached to the directory, so it would otherwise be
+  // missed. The startup walk passes false – nothing has changed yet.
+  const walkAndAdd = (dir, { announce = false } = {}) => {
     addDir(dir);
     let entries;
     try {
@@ -446,8 +456,9 @@ function startManualWatcher() {
       return;
     }
     for (const e of entries) {
-      if (!e.isDirectory()) continue;
-      walkAndAdd(join(dir, e.name));
+      const abs = join(dir, e.name);
+      if (e.isDirectory()) walkAndAdd(abs, { announce });
+      else if (announce) handleWatchEvent(abs);
     }
   };
   walkAndAdd(DATA_ROOT);
@@ -467,6 +478,10 @@ let recursiveWatcher = null;
 function attachWatcher() {
   if (!existsSync(DATA_ROOT)) {
     setTimeout(attachWatcher, 2000);
+    return;
+  }
+  if (USE_PER_DIRECTORY_WATCHER) {
+    startManualWatcher();
     return;
   }
   try {

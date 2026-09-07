@@ -128,7 +128,12 @@ let syncDivergences: SyncDivergence[] = [];
 let syncDismissedKey: string | null = null;
 const lastDotState = new Map<string, string>(); // surfaceKey -> "green"|"yellow"|""
 const pageHistory: Array<{ pageId: string; variantId: string }> = [];
-interface NavOpts { fade?: boolean }
+// `reload` forces the iframe to re-fetch even when the URL is unchanged.
+// Used by the refresh button and hot reload; navigation leaves it unset so
+// the same-document short-circuit in selectVariant still avoids flicker.
+interface NavOpts { fade?: boolean; reload?: boolean }
+// Scroll offset captured by a same-document reload that is still loading.
+let reloadScroll: { x: number; y: number } | null = null;
 
 // DOM refs ------------------------------------------------------------------
 
@@ -192,7 +197,7 @@ tweaksClose.addEventListener("click", () => toggleTweaksPanel(false));
 syncClose.addEventListener("click", () => dismissSyncPanel());
 syncResetBtn.addEventListener("click", () => resetSurfaceToBaseline());
 syncPromoteBtn.addEventListener("click", () => copyPromotePrompt());
-refreshBtn.addEventListener("click", () => refresh());
+refreshBtn.addEventListener("click", () => refresh({ reload: true }));
 fullscreenBtn.addEventListener("click", () => enterFullscreen());
 approveBtn.addEventListener("click", () => approveCurrentSurface());
 resetBtn.addEventListener("click", () => resetToSnapshot());
@@ -259,22 +264,68 @@ refresh().catch((err) => {
   showEmpty();
 });
 
-// Hot reload. `import.meta.hot` is truthy only under `vite dev`; in the
-// shipped bundle that branch is dead-code-eliminated and SSE from the
-// zero-dep launcher drives the reload instead. Event name + payload shape
-// match across both transports.
+// Hot reload ----------------------------------------------------------------
+//
+// One save produces a burst of watcher events: a rename-replace write emits
+// several for the temp file and the target, and the server debounces per
+// path, not per burst. Coalesce them so the iframe swaps once. The cap keeps
+// a sustained write stream (e.g. a build step) from postponing the reload
+// forever.
+const HOT_RELOAD_COALESCE_MS = 100;
+const HOT_RELOAD_MAX_WAIT_MS = 500;
+let hotReloadTimer: number | null = null;
+let hotReloadFirstEventAt = 0;
+let hotReloadNeedsRefresh = false;
+
 function onDataChanged(path: string): void {
-  if (path.endsWith("/index.json") || path.endsWith("/manifest.json") || path.endsWith("/tokens.css")) {
-    refresh();
-    return;
+  // Index, manifest, and token files anywhere can add or remove entries in
+  // the header dropdowns, so they always trigger a full refresh.
+  const isIndex =
+    path.endsWith("/index.json") || path.endsWith("/manifest.json") || path.endsWith("/tokens.css");
+  // Anything else only matters if the active surface can link it – its own
+  // directory, or a DS in its extends chain (fonts, shared CSS, images).
+  if (!isIndex && !activeDataDirs().some((dir) => path.startsWith(dir))) return;
+  if (isIndex) hotReloadNeedsRefresh = true;
+  const now = Date.now();
+  if (hotReloadTimer === null) {
+    hotReloadFirstEventAt = now;
+  } else {
+    window.clearTimeout(hotReloadTimer);
   }
-  if (!activeVariant) return;
-  const url = activeVariantUrl();
-  if (url && path === url) {
+  const remaining = Math.max(0, hotReloadFirstEventAt + HOT_RELOAD_MAX_WAIT_MS - now);
+  hotReloadTimer = window.setTimeout(flushHotReload, Math.min(HOT_RELOAD_COALESCE_MS, remaining));
+}
+
+function flushHotReload(): void {
+  hotReloadTimer = null;
+  const needsRefresh = hotReloadNeedsRefresh;
+  hotReloadNeedsRefresh = false;
+  if (needsRefresh) {
+    refresh({ reload: true }).catch((err) => console.error(err));
+  } else {
     reloadActiveVariant();
   }
 }
 
+// Data-root-relative directory prefixes (matching the SSE payload shape)
+// whose files the active surface may link.
+function activeDataDirs(): string[] {
+  if (mode === "designs" && activeDesign) {
+    return [
+      `/designs/${activeDesign.name}/`,
+      ...resolveExtendsChain(activeDesign.designSystem).map((ds) => `/design-systems/${ds.name}/`),
+    ];
+  }
+  if (mode === "design-systems" && activeDS) {
+    return resolveExtendsChain(activeDS.name).map((ds) => `/design-systems/${ds.name}/`);
+  }
+  return [];
+}
+
+// `import.meta.hot` is truthy only under `vite dev`; in the shipped bundle
+// that branch is dead-code-eliminated and SSE from the zero-dep launcher
+// drives the reload instead. Event name + payload shape match across both
+// transports.
 if (import.meta.hot) {
   import.meta.hot.on("open-designer:data-changed", (payload: { path: string }) => {
     onDataChanged(payload.path);
@@ -297,21 +348,6 @@ if (import.meta.hot) {
 function activeContext(): { pages: Page[] } | null {
   if (mode === "designs") return activeDesign;
   return activeDS;
-}
-
-function activeVariantUrl(): string | null {
-  if (!activeVariant) return null;
-  if (mode === "designs" && activeDesign) {
-    return `/designs/${activeDesign.name}/${activeVariant.file}`;
-  }
-  if (mode === "design-systems" && activeDS) {
-    const surface = surfaceOf(activeDS, activePage?.id);
-    if (surface?.kind === "tokens") {
-      return `/design-systems/${activeDS.name}/preview/${activeVariant.file}`;
-    }
-    return `/design-systems/${activeDS.name}/pages/${activeVariant.file}`;
-  }
-  return null;
 }
 
 // Normalize -----------------------------------------------------------------
@@ -627,7 +663,7 @@ function resolveExtendsChain(dsName: string | undefined): NormalizedDS[] {
 
 // Refresh + selection --------------------------------------------------------
 
-async function refresh(): Promise<void> {
+async function refresh(opts: { reload?: boolean } = {}): Promise<void> {
   const prevDesignName = activeDesign?.name;
   const prevDSName = activeDS?.name;
   const prevPageId = activePage?.id;
@@ -680,7 +716,7 @@ async function refresh(): Promise<void> {
       showEmpty();
       return;
     }
-    selectPage(page, { variantId: prevVariantId });
+    selectPage(page, { variantId: prevVariantId, reload: opts.reload });
   } else {
     if (designSystems.length === 0) {
       showEmpty();
@@ -718,7 +754,7 @@ async function refresh(): Promise<void> {
       return;
     }
     await refreshTokensMap();
-    selectPage(page, { variantId: prevVariantId });
+    selectPage(page, { variantId: prevVariantId, reload: opts.reload });
   }
 }
 
@@ -803,7 +839,7 @@ function selectPage(
     showEmpty();
     return;
   }
-  selectVariant(variant, { fade: opts.fade });
+  selectVariant(variant, { fade: opts.fade, reload: opts.reload });
 }
 
 function selectVariant(variant: VariantEntry, opts: NavOpts = {}): void {
@@ -838,7 +874,8 @@ function selectVariant(variant: VariantEntry, opts: NavOpts = {}): void {
   if (!nextUrl) return;
 
   const resolvedNext = new URL(nextUrl, window.location.href).href;
-  if (iframe.src === resolvedNext && iframe.contentDocument) {
+  const sameDoc = iframe.src === resolvedNext && Boolean(iframe.contentDocument);
+  if (sameDoc && !opts.reload) {
     // Same document, no reload. Re-apply tweaks in case they changed and
     // re-render the panel; skip the fade entirely.
     picker.clearAll();
@@ -853,11 +890,23 @@ function selectVariant(variant: VariantEntry, opts: NavOpts = {}): void {
   // documents. Added synchronously with the src change so the old content
   // stays visible for every other step (fetches, tweak recompute, etc.)
   // and the hidden window is as short as possible.
+  // Reloading the same document (refresh button, hot reload) keeps the
+  // reader's place: capture the scroll offset now and restore it once the
+  // new document has laid out. Setting `src` to its current value is what
+  // forces the re-fetch. If a reload is already in flight the window shows
+  // the transient blank document at (0, 0), so reuse the offset captured
+  // when that reload started.
+  const win = iframe.contentWindow;
+  const keepScroll = sameDoc && opts.reload
+    ? (reloadScroll ?? (win ? { x: win.scrollX, y: win.scrollY } : null))
+    : null;
+  reloadScroll = keepScroll;
   iframe.classList.add("fading");
   iframe.src = nextUrl;
   picker.clearAll();
 
   iframe.onload = () => {
+    if (keepScroll) iframe.contentWindow?.scrollTo(keepScroll.x, keepScroll.y);
     normalizeIframeLayout(iframe);
     injectTokensChain(iframe);
     injectPreviewChrome(iframe);
@@ -878,6 +927,9 @@ function selectVariant(variant: VariantEntry, opts: NavOpts = {}): void {
     // cap so a 404'd link never traps the iframe invisible.
     waitForStylesheets(iframe, STYLESHEET_WAIT_MS).then(() => {
       requestAnimationFrame(() => {
+        // Stylesheets can change the page height – restore again after layout.
+        if (keepScroll) iframe.contentWindow?.scrollTo(keepScroll.x, keepScroll.y);
+        reloadScroll = null;
         syncIframeBackground(iframe);
         iframe.classList.remove("fading");
         warnIfStateUnused(iframe, tweaks);
@@ -926,7 +978,7 @@ function walkRulesForDataState(rules: CSSRuleList): boolean {
 
 function reloadActiveVariant(): void {
   if (!activeVariant) return;
-  selectVariant(activeVariant);
+  selectVariant(activeVariant, { reload: true });
 }
 
 function collectTweaks(index: NormalizedIndex | undefined, page: Page, variant: VariantEntry): Tweak[] {

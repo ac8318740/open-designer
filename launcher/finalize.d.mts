@@ -62,6 +62,8 @@ export function applyApprovalsBody(
 
 export function titlecaseId(id: string): string;
 
+export function shouldIgnoreFilename(name: string | undefined | null): boolean;
+
 export function validateDesignIndex(
   index: unknown,
   designName: string,

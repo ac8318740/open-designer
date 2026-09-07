@@ -443,3 +443,16 @@ function visitDesignTweaks(tweaks, designName, warnings) {
 }
 
 export const FINALIZE_SCHEMA_VERSION = SCHEMA_VERSION;
+
+// Files the hot-reload watchers must not report: atomic-write temp files
+// (`.tmp` from atomicWrite above), editor swap files, and OS metadata. Both
+// the launcher's SSE watcher and the Vite dev plugin call this so `vite dev`
+// and `npx open-designer-viewer` reload on the same set of changes.
+export function shouldIgnoreFilename(name) {
+  if (!name) return true;
+  if (name.endsWith(".tmp")) return true;
+  if (name === ".DS_Store") return true;
+  if (name.endsWith(".swp") || name.endsWith(".swo")) return true;
+  if (name.endsWith("~")) return true;
+  return false;
+}

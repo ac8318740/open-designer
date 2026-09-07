@@ -17,6 +17,7 @@ import {
   applyPromoteBody,
   isValidDesignName,
   safeJoin,
+  shouldIgnoreFilename,
   titlecaseId,
   validateDesignIndex,
 } from "../../launcher/finalize.mjs";
@@ -211,6 +212,9 @@ export function dataServer(dataRoot: string): Plugin {
       server.watcher.add(root);
       const notify = (absPath: string) => {
         if (!absPath.startsWith(root)) return;
+        // Same filter as serve.mjs – otherwise every atomic write's `.tmp`
+        // file (finalize, approve, promote) triggers a spurious reload.
+        if (shouldIgnoreFilename(absPath.split(/[\\/]/).pop())) return;
         const rel = absPath.slice(root.length).replace(/\\/g, "/");
         server.ws.send({
           type: "custom",
