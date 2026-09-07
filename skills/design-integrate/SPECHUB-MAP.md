@@ -12,6 +12,8 @@ Check in this order:
 
 Any of these → **soft integration mode**.
 
+This rule decides spechub and nothing else. impeccable is a different plugin with a different presence rule, and `../design-system/IMPECCABLE.md` holds it. Neither answer implies the other – a project can have spechub without impeccable, or impeccable without spechub.
+
 ## Full pipeline + spechub
 
 ### `/spechub:propose`
@@ -121,6 +123,9 @@ Orchestrate subagents directly.
      casing, punctuation)
    ```
 
+4. **Design detector**, when impeccable is present. After task-checker returns
+   PASS, run the section "Design detector (no spechub)" below.
+
 ## Quick path + no spechub
 
 Skip test-writing for purely visual pieces.
@@ -143,11 +148,79 @@ Skip test-writing for purely visual pieces.
    <bundle>/rules.md – flag violations as warnings.
    ```
 
-3. **frontend-verifier** (if available as `spechub:frontend-verifier`):
+3. **Design detector**, when impeccable is present. After task-checker returns
+   PASS, run the section "Design detector (no spechub)" below.
+
+4. **frontend-verifier** (if available as `spechub:frontend-verifier`):
    ```
    Navigate to <route> after `npm run dev` and snapshot. Compare
    layout, colors, copy structure against <bundle>/resolved/<pageId>.html.
    ```
+
+## Design detector (no spechub)
+
+With spechub present, its task-checker already runs impeccable's design detector and this section does nothing. With spechub absent, the skill runs the detector itself, once per page, after task-checker returns PASS and before the frontend-verifier.
+
+The detector is a static check. It reads files and starts no browser, so it replaces neither the rules-lint pass in Step 8 of `SKILL.md` nor the frontend-verifier.
+
+```mermaid
+flowchart LR
+    P["Page ported"] --> Q{"spechub present?"}
+    Q -->|yes| S["Spechub implements<br/>/spechub:implement<br/>its checker runs the detector"]
+    Q -->|no| C["Own checker pass<br/>task-checker"]
+    C --> D["Design detector<br/>npx impeccable detect --json"]
+    D -->|exit 2| F["Findings to task-executor"]
+    D -->|exit 1| W["Warning<br/>page passes on other checks"]
+    D -->|exit 0| K["Page done"]
+    F -->|"fix, retry once"| C
+```
+
+1. **Decide whether impeccable is present.** Follow the presence rule in `../design-system/IMPECCABLE.md` and nothing else. Absent means the skill skips this section.
+
+2. **Derive the file list.** The list is the paths task-executor reported changing for this page. Every executor report names its files. Confirm each path against the working tree:
+
+    ```bash
+    git status --porcelain
+    ```
+
+    - Use `git status` to validate the executor's list, never to build it. The command returns the whole working tree, so page two would rescan page one
+    - Drop any path that carries a `D` status code. The detector cannot read a deleted file
+    - Keep the new path of a rename. `git status` prints a rename as `R old -> new`
+    - Drop every path under `.open-designer/`. Nothing there ships into the codebase
+    - Pass files, never directories. A directory scan covers files the work never touched
+    - An empty list means task-executor changed nothing. Skip the rest of this section
+
+3. **Set the verdict.** This run alone decides whether the page passes. Run it from the project root:
+
+    ```bash
+    npx impeccable detect --json --no-advisory <file> [<file>...]
+    ```
+
+    | Exit code | What it means | What the skill does |
+    |---|---|---|
+    | 0 | No firm finding | Go to step 4 |
+    | 2 | At least one firm finding. The JSON on stdout lists them | Go to step 5 |
+    | Any other | The detector could not run | Report one warning line saying what the command printed. Skip steps 4 and 5; the page passes on the other checks |
+
+4. **Collect the advisories.** Run the detector a second time over the same file list, without `--no-advisory`:
+
+    ```bash
+    npx impeccable detect --json <file> [<file>...]
+    ```
+
+    - Read the JSON. Every finding carrying `"advisory": true` becomes a note on the detector line of the Step 11 report in `SKILL.md`
+    - An advisory is a suggestion. It never goes back to task-executor and it never blocks the page
+    - Exit 0 and exit 2 both hold usable output. Say in one line that the advisory run failed under any other exit code, then continue
+
+5. **Send the firm findings back to task-executor.** Only exit 2 reaches this step.
+
+    - Send the JSON – each finding's `file`, `line`, `antipattern`, `snippet`, and `description` – with the same brief the executor already had
+    - `line` is 0 for a finding that applies to the whole file
+    - Add one line to that brief: "fix these detector findings without reintroducing hex literals; use the project's tokens by name"
+    - Re-run task-checker, then repeat step 3
+    - A FAIL from that re-run goes back to task-executor the way any checker FAIL does, before the detector runs again
+    - Stop after that second verdict run. A second exit 2 goes to the user with the remaining findings, and the user decides what happens next
+    - Do not stamp `chosen.shippedAt` (Step 10 in `SKILL.md`) when a page's verdict run ended on exit 2
 
 ## Notes
 

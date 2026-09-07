@@ -56,6 +56,7 @@ Without spechub:
 - Spawn `test-writer` agent → writes failing tests encoding the new behavior.
 - Spawn `task-executor` agent → implements to make tests pass.
 - Spawn `task-checker` agent → verifies.
+- Run impeccable's design detector over the changed files, when impeccable is present → firm findings go back to `task-executor` (commands in `SPECHUB-MAP.md`).
 
 ### Quick path
 
@@ -68,6 +69,7 @@ Without spechub:
 - Skip test-writing for purely visual pieces.
 - `task-executor` writes the code.
 - `task-checker` runs the usual verification (typecheck, lint, existing tests).
+- Run impeccable's design detector over the changed files, when impeccable is present → firm findings go back to `task-executor` (commands in `SPECHUB-MAP.md`).
 - Frontend-verifier if available.
 
 ## Examples

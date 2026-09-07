@@ -12,7 +12,7 @@ Turns a finalized design from `.open-designer/designs/<name>/` into real compone
 
 The skill is a dynamic dispatcher – it resolves the DS context, explores, proposes a path, asks for approval, then executes.
 
-It harmonizes softly with spechub: if spechub is installed it uses `/spechub:propose`, `/spechub:design`, `/spechub:implement`, or `/spechub:implement-quick`. If spechub is absent it orchestrates the same agent types (`test-writer`, `task-executor`, `task-checker`) directly.
+It harmonizes softly with spechub: if spechub is installed it uses `/spechub:propose`, `/spechub:design`, `/spechub:implement`, or `/spechub:implement-quick`. If spechub is absent it orchestrates the same agent types (`test-writer`, `task-executor`, `task-checker`) directly. It also runs impeccable's design detector over the ported files itself, the same check spechub's task-checker runs.
 
 Integration is **one design at a time**.
 
@@ -175,12 +175,18 @@ Do NOT paste the whole HTML into the prompt. Point to paths.
 
 #### Step 8 – Verify (extended)
 
-`agent-browser` snapshot per route **plus a rules-lint pass**:
+Three checks, in this order. The first carries a verdict forward from Step 7. The other two read the rendered page.
 
-- Compare each shipped surface against `rules.md`. Flag obvious violations (gradient where rules forbid; emoji in chrome where banned; second accent hue where rule says one).
-- Report any `voice.md` violations in shipped strings (Title Case where sentence case is required, etc.).
+1. **Design detector.** Already ran as the last item of Step 7, per "Design detector (no spechub)" in `SPECHUB-MAP.md`. Carry its verdict into this step; never run it again here. With spechub present its task-checker ran it; with impeccable absent Step 7 skipped it.
 
-These are warnings, not failures – the user decides whether to fix.
+2. **`agent-browser` snapshot per route.** Compare the live route against `resolved/<pageId>.html`.
+
+3. **Rules-lint pass.**
+
+    - Compare each shipped surface against `rules.md`. Flag obvious violations (gradient where rules forbid; emoji in chrome where banned; second accent hue where rule says one).
+    - Report any `voice.md` violations in shipped strings (Title Case where sentence case is required, etc.).
+
+Checks 2 and 3 produce warnings, not failures – the user decides whether to fix. A firm detector finding is not a warning; Step 7 sends it back to `task-executor`.
 
 #### Step 9 – Feedback loop into the DS
 
@@ -197,16 +203,23 @@ POST /data/designs/<name>/finalize
 
 The launcher writes the timestamp atomically and returns the updated chosen block. This is the ONLY write to `designs/<name>/` this skill is allowed to make.
 
+Do not stamp when a page's detector verdict run ended on exit 2 (Step 7). Settle those findings with the user first.
+
 Do NOT delete drafts.
 
 #### Step 11 – Report
 
 End with a short report:
 
-- **DS shipped** (if Stage 1 ran): where tokens.css landed, font setup, doc location.
+- **DS shipped** (if Stage 1 ran): where tokens.css landed, font setup, doc location. Say "DS re-shipped: tokens only" instead when Stage 1 ran again, and name the token file.
 - **Pages shipped**: each page, its target route, full or quick path.
 - **Files modified**: in the codebase, not the design folder.
 - **Verification**: screenshots if produced, rules-lint warnings if any.
+- **Design detector**: the verdict per page, the firm findings `task-executor` fixed, and every advisory as a note. Use these words for the other outcomes:
+    - "skipped: impeccable absent", or "run by spechub's task-checker", when the skill did not run the detector itself
+    - "skipped: nothing to scan" when the file list came out empty
+    - "warning: detector could not run (<what it printed>)" for exit 1 or any other exit
+    - "unresolved: <n> firm findings, user decides" for a second exit 2
 - **Gaps appended** (if any): the specific `gaps.md` entries you added.
 - **Cleanup offer**: "Want me to delete the other variants now? They're at `.open-designer/designs/<name>/`. Default: keep them."
 
