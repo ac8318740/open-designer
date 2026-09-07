@@ -25,6 +25,7 @@ Designs declare their DS in `index.json` as `designSystem: "<name>"` and `<link>
 
 - The user says "set up a design system", "extract the design system", "init open-designer", "create a design system for this project", or anything that asks for a DS artifact.
 - The user says "edit the design system", "tweak the DS", "add a token", "promote this change to the DS".
+- The user says "re-import the tokens from DESIGN.md", or the `/design` skill hands off to do it.
 - The user says "list design systems", "show design systems".
 - The `/design` skill hands off when no DS exists (interactive gate).
 
@@ -73,10 +74,11 @@ Run it from the repo root.
 
 ## Edit flow
 
-See `EDIT.md`. Two entry points:
+See `EDIT.md`. Three entry points:
 
 1. **Pasted selection payload** from the viewer while the user is in DS mode (the payload's lead line says "design system"): locate the DS, apply the edit to the playable page HTML or to `tokens.css` / `voice.md` / `rules.md`.
 2. **Promote payload** from the viewer's Promote button: patch `:root` in `tokens.css` for the named target, bump `manifest.updatedAt`.
+3. **Re-import from `DESIGN.md`** for a DS whose `manifest.tokensSource` says `DESIGN.md`: rewrite the imported token groups from the current `DESIGN.md`. `EDIT.md` Shape 4 holds the steps.
 
 The user can also describe edits in plain conversation ("add an amber success token", "banish exclamation points from voice.md", "document the 1px-border rule") – apply them to the right file, bump `manifest.updatedAt`.
 
@@ -107,7 +109,7 @@ If you're tempted to write something that isn't backed by source, stop and ask t
 ## Companion files
 
 - `CREATE.md` – brownfield + greenfield procedures, 2/10/30-minute depth spectrum, conventions sweep.
-- `EDIT.md` – selection-payload handling, Promote handling, conversational edits.
+- `EDIT.md` – selection-payload handling, Promote handling, conversational edits, the `DESIGN.md` re-import.
 - `CONVENTIONS.md` – how the conventions sweep reads README, `DESIGN_PRINCIPLES.md`, `globals.css` comments, sample JSX strings to populate `voice.md` / `rules.md` / `gaps.md`.
 - `IMPECCABLE.md` – the impeccable presence rule, the version floor, how to call `detect` and `document`, and what `DESIGN.md` holds.
 - `PAGES.md` – DS playable-page templates (landing, dashboard, settings, modal, empty state) and the flexible 1–N pages guidance.

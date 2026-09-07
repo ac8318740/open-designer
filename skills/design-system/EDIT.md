@@ -1,6 +1,6 @@
 # Edit flow
 
-Two payload shapes come from the viewer while the user is in Design systems mode, plus plain conversational edits.
+Two payload shapes come from the viewer while the user is in Design systems mode, plus plain conversational edits and a re-import from `DESIGN.md`.
 
 ## Shape 1 – selection payload
 
@@ -28,7 +28,7 @@ The viewer's Promote button POSTs to `/data/design-systems/<ds>/promote` – the
 
 If the user pastes the toast text or asks "why did my tweak disappear?", explain: the Promote button wrote the value to `tokens.css` `:root`. The local tweak is now the default for every design that links this DS.
 
-The promote also bumps `manifest.updatedAt`. The next `/design-integrate` run reads that stamp, sees it is newer than `manifest.shippedAt`, and offers to re-ship the tokens into the codebase.
+The launcher also stamps `manifest.promotedAt` and `manifest.updatedAt`. The next `/design-integrate` run reads that stamp, sees it is newer than `manifest.shippedAt`, and offers to re-ship the tokens into the codebase.
 
 ## Shape 3 – conversational edits
 
@@ -41,6 +41,74 @@ Plain-language requests. Route each by file:
 - "add a settings playable page" → create `pages/settings/01-default.html` plus the `pages/index.json` entry. Use DS tokens and the playable-page shape in `PAGES.md`.
 
 Every conversational edit bumps `manifest.updatedAt`.
+
+## Shape 4 – re-import from `DESIGN.md`
+
+A DS whose tokens came from `DESIGN.md` goes stale when someone edits a token in the code. The code reaches `DESIGN.md` through impeccable's `document` playbook, and this shape carries `DESIGN.md` back into `tokens.css`.
+
+Two things start it:
+
+- A plain request, such as "re-import the tokens from DESIGN.md".
+- The hand-off from the `design` skill's first-turn gate, which offers the re-import when the DS is older than `DESIGN.md`.
+
+```mermaid
+flowchart LR
+    F["Design first turn<br/>/design"] --> S{"Imported from DESIGN.md?<br/>manifest.tokensSource"}
+    S -- no --> G["Gate as today<br/>no offer"]
+    S -- yes --> N{"DESIGN.md newer?<br/>mtime vs importedAt"}
+    N -- no --> G
+    N -- yes --> P{"Unshipped promote?<br/>promotedAt vs shippedAt"}
+    P -- yes --> X["Refuse, re-ship first<br/>/design-integrate"]
+    P -- no --> O["Offer the re-import<br/>AskUserQuestion"]
+    O --> E["Rewrite the imported groups<br/>EDIT.md Shape 4"]
+```
+
+`DESIGN.md` is read-only here. The code is the only source of truth for tokens, `DESIGN.md` derives from the code, and this shape never writes either one (`IMPECCABLE.md`).
+
+To apply:
+
+1. **Refuse an unshipped promote.** The DS holds an unshipped promote in two cases:
+    - `manifest.promotedAt` exists and `manifest.shippedAt` does not.
+    - `manifest.promotedAt` is newer than `manifest.shippedAt`.
+
+    Stop in either case with one line: re-ship through `/design-integrate` first. A manifest with no `promotedAt` carries no promote, so carry on.
+2. **Re-run the 2b.3b mapping.** Read the current `DESIGN.md` and the `.impeccable/design.json` sidecar. Produce the properties the mapping table in `CREATE.md` §2b.3b names. Find `DESIGN.md` the way §2b.0 does – the project root, then `.agents/context/`, then `docs/`.
+3. **Sort the properties into three sets.** The list in `manifest.importedProperties` holds the names the last import wrote:
+    - Rewrite – every property step 2's mapping produces.
+    - Removal – every name in `importedProperties` the mapping no longer produces.
+    - Hand-added – every other property in `tokens.css`. Never touch one.
+
+    An import from before `importedProperties` existed carries no such list. Fall back to §2b.3b's naming shapes for typography, radius, spacing, shadows, and motion. Ask before deleting any colour property.
+4. **Rewrite only the properties the mapping produces.** Leave the rest of `tokens.css` alone:
+    - Hand-added tokens.
+    - The `@media (prefers-color-scheme: dark)` block.
+    - The semantic base styles.
+    - `--odp-preview-accent`.
+5. **Treat a dropped property as a removal.** Apply the "Removing tokens" rule below to each name in the removal set. It greps the designs and warns the user first.
+    - A property the user keeps stays in `tokens.css` and leaves `importedProperties`.
+    - That property becomes hand-added, so no later re-import proposes it again.
+6. **Update the previews.** Edit a card in `preview/` in two cases only:
+    - A swatch or a sample names a token the re-import removed.
+    - A swatch or a sample names a token the re-import added.
+
+    A card picks up a changed value on its own, because it links `tokens.css`. The sidecar decides two whole cards (2b.6):
+
+    - A sidecar that vanished. Delete `preview/shadows.html` and `preview/motion.html`, then drop their entries from `preview/index.json` if that file exists.
+    - A sidecar that appeared. Emit both cards the way 2b.6 does.
+7. **Update `gaps.md` for the sidecar.** The sidecar decides one `gaps.md` entry:
+    - No sidecar this time. Write the entry §2b.3b writes – the skill imported no shadows or motion.
+    - A sidecar that came back. Remove that entry.
+8. **Refresh the `theme.md` pointer.** Its group list comes from §2b.3b. Rewrite that list when the set of imported groups changed:
+    - A sidecar that appeared adds shadows and motion.
+    - A sidecar that vanished drops them.
+
+    Copy no value into `theme.md`.
+9. **Stamp the manifest.** Write `importedAt` and `updatedAt`, both the current ISO timestamp. Write `importedProperties` again, holding the names step 2's mapping produced. Leave `tokensSource` as it is.
+10. **Reply in one line.** Name the file and the three counts:
+
+    ```
+    Re-imported tokens.css from DESIGN.md – 6 properties changed, 2 added, 1 removed.
+    ```
 
 ## New-token discipline
 

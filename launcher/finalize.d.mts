@@ -35,6 +35,11 @@ export function applyPromoteBody(
   body: Record<string, unknown>,
 ): { css?: string; error?: string };
 
+export function stampPromote(
+  manifest: Record<string, unknown>,
+  now: string,
+): Record<string, unknown>;
+
 export interface ApprovalsBody {
   action?: string;
   // "tokens" is the new wire-protocol value. "preview" is still accepted as
