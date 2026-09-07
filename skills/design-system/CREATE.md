@@ -554,7 +554,7 @@ Document the override surface: at the top of the child's `tokens.css`, list the 
 }
 ```
 
-`shippedAt` and `shippedTo` are written only by `/design-integrate`. Do not set them here.
+`shippedAt`, `shippedTo`, and `shippedTokens` are written only by `/design-integrate`. Do not set them here.
 
 ## After emit
 

@@ -28,6 +28,8 @@ The viewer's Promote button POSTs to `/data/design-systems/<ds>/promote` – the
 
 If the user pastes the toast text or asks "why did my tweak disappear?", explain: the Promote button wrote the value to `tokens.css` `:root`. The local tweak is now the default for every design that links this DS.
 
+The promote also bumps `manifest.updatedAt`. The next `/design-integrate` run reads that stamp, sees it is newer than `manifest.shippedAt`, and offers to re-ship the tokens into the codebase.
+
 ## Shape 3 – conversational edits
 
 Plain-language requests. Route each by file:

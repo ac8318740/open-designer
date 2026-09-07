@@ -32,7 +32,8 @@ If the user names a specific design, use that. Otherwise pick the design under `
 
 - **Never modify `.open-designer/designs/<name>/`** during integration, except to add `chosen.shippedAt` at the very end.
 - **Never modify `.open-designer/design-systems/<ds>/`** during integration, except:
-  - `manifest.shippedAt` + `manifest.shippedTo` after Stage 1.
+  - `manifest.shippedAt`, `manifest.shippedTo`, and `manifest.shippedTokens` after Stage 1.
+  - `manifest.shippedAt` again after a re-ship, and `manifest.shippedTokens` when an older manifest has none – `shippedTo` never changes after the first ship.
   - Append-only `briefing/gaps.md` entries when a real gap is discovered during integration.
 - **Never delete drafts** without explicit user confirmation.
 - **Always show the path recommendation before executing.**
@@ -71,14 +72,32 @@ Run on every integration, before any exploration agents fire.
 
 ### Stage 1 – Ship the DS (once per DS)
 
-If `manifest.shippedAt` is absent or `shippedTo` is missing, run Stage 1 before any per-design work. Otherwise skip to Stage 2.
+If `manifest.shippedAt` is absent or `shippedTo` is missing, run Stage 1 before any per-design work.
 
-Use `AskUserQuestion` to confirm Stage 1 should run. Then run a clarification round specifically for porting the DS:
+If both exist, check whether the DS moved ahead of the codebase. Read `manifest.updatedAt` on the leaf DS and on every parent in the `extends` chain. Any one of them newer than the leaf's `shippedAt` means the DS changed after it shipped.
+
+A Promote click in the viewer is the usual cause. Propose a tokens-only re-ship and confirm it with `AskUserQuestion`:
+
+- **Re-ship the tokens now** – the recommended default. Run "Stage 1, again" below, then carry on to Stage 2.
+- **Skip the re-ship** – ship the design against the tokens already in the codebase. Warn in one line that those tokens are older than the DS.
+
+Otherwise skip straight to Stage 2.
+
+For a first ship, use `AskUserQuestion` to confirm Stage 1 should run. Then run a clarification round specifically for porting the DS:
 
 - **Where does `tokens.css` land?** Suggest a location inferred from the codebase:
   - Next.js / Tailwind – merge into `globals.css`, or into `src/styles/tokens.css` imported from `globals.css`.
   - Vite + plain CSS – `src/styles/tokens.css`.
   - Component library using CSS-in-JS – ask; this may need a Tailwind preset or a theme module.
+
+  The answer becomes `manifest.shippedTokens`, the token file's path relative to `shippedTo`. Write the tokens between two marker comments so a later re-ship can replace them in place:
+
+  ```
+  /* open-designer tokens: <ds> – start */
+  /* open-designer tokens: <ds> – end */
+  ```
+
+  The markers go in either way – tokens in their own file, or tokens merged into an existing `globals.css`.
 - **Font setup.** `gaps.md` lists font substitutions and self-host needs. Confirm the framework's font-loading mechanism (`next/font`, `@font-face` + `woff2`, link tags). Wire accordingly.
 - **Voice + rules destination.** Where should `voice.md` + `rules.md` content live in the project's docs? Suggest `THEME.md`, `docs/design-system.md`, or append to an existing `DESIGN_PRINCIPLES.md`.
 - **Icon library.** If `rules.md` pins an icon library (e.g., Lucide), confirm the dep is installed; if not, offer to add it.
@@ -86,9 +105,68 @@ Use `AskUserQuestion` to confirm Stage 1 should run. Then run a clarification ro
 
 Execute Stage 1 with the full resolved bundle + the clarification answers as input to the executor (same spechub/no-spechub split as Stage 2 below, but tuned: test-writer is typically unnecessary for a DS port – no new behavior, only tokens + docs).
 
-After Stage 1 succeeds:
+After Stage 1 succeeds, write three fields to the DS's `manifest.json`:
 
-- Write `manifest.shippedAt = <now ISO>` and `manifest.shippedTo = <absolute path to project>` to the DS's `manifest.json`. These are the only DS writes this skill is allowed to make.
+- `shippedAt` – the current ISO timestamp.
+- `shippedTo` – the absolute path to the project.
+- `shippedTokens` – the shipped token file's path, relative to `shippedTo`.
+
+A re-ship later stamps `shippedAt` again and fills `shippedTokens` when an older manifest has none. `shippedTo` never changes after the first ship. Together these are the only DS writes this skill is allowed to make.
+
+Then run "After tokens land in the codebase" below.
+
+### After tokens land in the codebase
+
+A first ship and a re-ship both put new tokens in the code, and `DESIGN.md` has to follow them. Decide impeccable's presence with the rule in `../design-system/IMPECCABLE.md`, then take one of three branches:
+
+- impeccable present and spechub absent – invoke `/impeccable document` with the Skill tool and answer "refresh"
+- spechub present – do nothing, because spechub's commit-time sync refreshes `DESIGN.md`
+- impeccable absent – do nothing
+
+`document` asks refresh, overwrite, or merge when `DESIGN.md` already exists, and no flag skips that question. It writes the file and asks nothing when the project has no `DESIGN.md` yet. Never write `DESIGN.md` yourself.
+
+### Stage 1, again – re-ship the tokens
+
+A re-ship carries the DS's current tokens into the codebase and touches nothing else. The voice and rules docs, fonts, icons, and assets stay as the first Stage 1 left them.
+
+The re-ship is one hop in a loop that starts at the viewer's Promote button and ends back at the DS:
+
+```mermaid
+flowchart LR
+    P["Promote a token<br/>viewer"] --> T["Design system tokens<br/>tokens.css"]
+    T --> R["Re-ship the tokens<br/>Stage 1, again"]
+    R --> C["Codebase tokens<br/>shippedTo + shippedTokens"]
+    C --> D["Write the doc from the code<br/>/impeccable document"]
+    D --> M["Design doc<br/>DESIGN.md"]
+    M --> I["Import a design system<br/>/design-system"]
+    I --> T
+```
+
+1. **Fill in a missing `shippedTokens`.** A manifest with `shippedAt` and no `shippedTokens` shipped under an older version of this skill. Ask the user which file holds the DS's tokens, then stamp that path relative to `shippedTo`.
+
+2. **Find the marker block.** Read `<shippedTo>/<shippedTokens>` and look for the two comments Stage 1 writes:
+
+    ```
+    /* open-designer tokens: <ds> – start */
+    /* open-designer tokens: <ds> – end */
+    ```
+
+    No markers means the file shipped before the markers existed. Show the user the block you read as the DS's tokens and confirm it with `AskUserQuestion`. Add the markers around the replacement on this write.
+
+3. **Build the replacement.** Take the resolved `tokens.css` from the Stage 0 bundle at `/tmp/od-resolved-<design>-<ts>/tokens.css` – parent first, child last.
+
+4. **Write it through the quick path.** A token rewrite is a visual change with no backend risk:
+
+    - spechub present – `/spechub:implement-quick`, under "Quick path + spechub" in `SPECHUB-MAP.md`
+    - spechub absent – "Quick path + no spechub" in the same file, which runs task-executor, then task-checker, then "Design detector (no spechub)"
+
+    Tell the executor to replace only the text between the markers and to leave every other line alone.
+
+5. **Stamp the manifest.** Write `manifest.shippedAt = <now ISO>` again. Change nothing else – step 1 already settled `shippedTokens`.
+
+6. **Let `DESIGN.md` follow the code.** Run "After tokens land in the codebase" above.
+
+7. **Carry on to Stage 2.** The re-ship covers the tokens, and the design itself still needs shipping.
 
 ### Stage 2 – Ship the design
 
