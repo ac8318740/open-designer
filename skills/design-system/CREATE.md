@@ -2,6 +2,25 @@
 
 Two branches depending on what the repo has: **brownfield** (existing UI, code is the source of truth) and **greenfield** (no UI yet, a named reference base is the source of truth).
 
+```mermaid
+flowchart LR
+    A[Create a design system] --> B{Existing UI code?}
+    B -- no --> C[Greenfield: tokens.css<br/>from a reference base]
+    B -- yes --> D{impeccable present?}
+    D -- no --> E[tokens.css from<br/>the code scan]
+    D -- yes --> F{DESIGN.md exists?}
+    F -- no --> G[Run /impeccable document<br/>to write DESIGN.md]
+    G -- scan mode --> H[tokens.css<br/>from DESIGN.md]
+    G -- no tokens, seed declined --> E
+    F -- yes --> H
+    E --> I[Briefing sweep as today]
+    H --> I
+```
+
+impeccable is a separate Claude Code plugin that writes `DESIGN.md`, a design document. The YAML frontmatter of `DESIGN.md` holds the project's tokens, read from the code.
+
+`IMPECCABLE.md` holds the presence rule, the version floor, and the shape of `DESIGN.md`. This file never repeats them.
+
 Always start by detecting the surface.
 
 ## Step 1 – detect surface
@@ -20,6 +39,31 @@ If the scan finds **zero UI under source control** and **zero imports of a UI fr
 
 ## Brownfield branch
 
+### 2b.0 – Decide the token source
+
+`tokens.css` has one source, and this step picks it. Every later step reads the answer.
+
+Steps 3 and 4 below turn on whether the project already has a `DESIGN.md`. impeccable looks for `DESIGN.md`, `Design.md`, or `design.md` at the project root, then under `.agents/context/`, then under `docs/`. Search those three paths in that order, and treat the first hit as the project's `DESIGN.md`.
+
+1. Decide whether impeccable is present. Follow the presence rule and the version floor in `IMPECCABLE.md`.
+2. impeccable absent – the token source is the code. Skip 2b.0a, and run 2b.3a.
+3. impeccable present, and the search found a `DESIGN.md` – the token source is that file. Skip 2b.0a, and run 2b.3b. Never run `document` when one exists – it stops to ask refresh, overwrite, or merge.
+4. impeccable present, and the search found none – go to 2b.0a to write one.
+
+The decision changes two things and nothing else: which sub-step of 2b.3 runs, and the form `theme.md` takes. Everything else in this branch runs the same either way.
+
+### 2b.0a – Write `DESIGN.md` with `/impeccable document`
+
+Reached only from 2b.0 step 4.
+
+1. Invoke the `/impeccable document` slash command with the Skill tool. It is a playbook, not a command line – see `IMPECCABLE.md`.
+2. `document` scans the code first. It then continues in scan mode, or offers seed mode. It offers seed mode when it found no tokens, no components, and no rendered site.
+3. Scan mode – answer its two rounds of qualitative questions with the user. `document` writes `DESIGN.md` at the root, plus the sidecar `.impeccable/design.json`. The token source is `DESIGN.md`, so run 2b.3b.
+4. Seed mode offered – decline it, and run 2b.3a against the code. Carry a note into 2b.2, which writes it to `gaps.md`. The note: impeccable found no tokens, so open-designer wrote no `DESIGN.md` and lifted `tokens.css` from the code.
+5. `document` fails, or the user stops it, and no `DESIGN.md` exists. Ask via `AskUserQuestion` whether to retry `document` or to lift `tokens.css` from the code (2b.3a). Never write a `DESIGN.md` yourself.
+
+Steps 3, 4, and 5 are alternatives. Exactly one of them runs.
+
 ### 2b.1 – Run the codebase scan
 
 Produce `briefing/*.md` and `tokens.css` from the source of truth. Do not invent.
@@ -27,10 +71,14 @@ Produce `briefing/*.md` and `tokens.css` from the source of truth. Do not invent
 - **`routes.md`** – route table. For Next.js / Remix / Nuxt, walk the routes directory; for SPAs, find the router config. Columns: route, file, **what the user does there** (one line). This column merges the old `pages.md` into this file. Pull the activity summary from the page's main component, its JSX text, or a one-line code comment – never guess.
 - **`layouts.md`** – shells, grids, page wrappers. One row: file path, what it wraps.
 - **`components.md`** – components actually imported somewhere. Ignore unused exports. Group atomic (Button, Input) vs composite (Modal, Card grids). Columns: name, file, layout-relevant props.
-- **`theme.md`** – colors, font families, type scale, spacing, radii, shadows, motion. Pull from the source of truth (Tailwind config → CSS vars → theme module). No token appears here unless it's in the code.
+- **`theme.md`** – colors, font families, type scale, spacing, radii, shadows, motion (replaced by the 2b.3b pointer when the token source is `DESIGN.md`). Pull from the source of truth (Tailwind config → CSS vars → theme module). No token appears here unless it's in the code.
 - **`extractable-components.md`** – repeated inline patterns that look like components but live inline. Feedback for future refactors.
 
+`theme.md` is the only bullet the token source touches. Run the other four as written whatever 2b.0 decided – `DESIGN.md` names no files, and `routes.md`, `layouts.md`, `components.md`, and `extractable-components.md` all have to. The `design-integrate` skill reads those paths.
+
 ### 2b.2 – Run the conventions sweep
+
+This sweep runs whatever 2b.0 decided. impeccable writes nothing that stands in for `voice.md`, `rules.md`, or `gaps.md`.
 
 This is what produces `voice.md`, `rules.md`, `gaps.md`. See `CONVENTIONS.md` for the exact inputs and outputs. Summary:
 
@@ -42,6 +90,12 @@ This is what produces `voice.md`, `rules.md`, `gaps.md`. See `CONVENTIONS.md` fo
   - `gaps.md` – missing or fragile assets: no real logo, fonts not self-hosted, icon stroke not pinned, ad-hoc hex values not in `tokens.css`.
 
 ### 2b.3 – Produce `tokens.css`
+
+2b.0 already picked the sub-step. Run **2b.3a** when the token source is the code, and **2b.3b** when it is `DESIGN.md`. Never run both.
+
+Both write the same file under the same naming rule. Prefix every custom property with the DS name (`--lightnote-bg`, not `--bg`) so two DSes never clash in the viewer.
+
+#### 2b.3a – Lift `tokens.css` from the code
 
 Lift values from the code source of truth. Layout:
 
@@ -80,7 +134,80 @@ p  { color: var(--<prefix>-fg); }
 code { font-family: var(--<prefix>-font-mono); }
 ```
 
-Prefix every custom property with the DS name (`--lightnote-bg`, not `--bg`) so two DSes can co-exist without clashing in the shared viewer.
+#### 2b.3b – Import `tokens.css` from `DESIGN.md`
+
+Every value is a value from `DESIGN.md`'s frontmatter or from the sidecar `.impeccable/design.json`, copied verbatim. Read no token out of the code in this sub-step, and invent none. Skip any key the frontmatter does not carry – one present value, one custom property.
+
+| Source | Custom property |
+|---|---|
+| `colors.<slug>` | `--<prefix>-<slug>` |
+| `typography.<role>.fontFamily` | `--<prefix>-font-<role>` |
+| `typography.<role>.fontSize` | `--<prefix>-text-<role>` |
+| `typography.<role>.fontWeight` | `--<prefix>-weight-<role>` |
+| `typography.<role>.lineHeight` | `--<prefix>-leading-<role>` |
+| `typography.<role>.letterSpacing` | `--<prefix>-tracking-<role>` |
+| `typography.<role>.fontFeature` | `--<prefix>-features-<role>` |
+| `typography.<role>.fontVariation` | `--<prefix>-variation-<role>` |
+| `rounded.<step>` | `--<prefix>-radius-<step>` |
+| `spacing.<step>` | `--<prefix>-space-<step>` |
+| sidecar `extensions.shadows[].name` | `--<prefix>-shadow-<name>` |
+| sidecar `extensions.motion[].name` | `--<prefix>-motion-<name>` |
+
+Copy each colour string as written, in whatever CSS colour format `DESIGN.md` used.
+
+**Shadows and motion come from the sidecar.** The frontmatter never carries either one.
+
+- Sidecar present – import `extensions.shadows[]` and `extensions.motion[]`. Each entry is `{ name, value, purpose }`; the property takes `name` and `value`, and `purpose` is the label copy for the 2b.6 preview card.
+- Sidecar missing – emit no shadow or motion property, and skip `shadows.html` and `motion.html` in 2b.6. Append a `gaps.md` entry saying open-designer imported no shadows or motion. Run no code scan to fill the hole.
+
+**`components` are recipes, not tokens.** The frontmatter's `components` key names variants such as `button-primary` and their props. Emit none of them into `tokens.css`.
+
+**Dark mode is empty on import.** `DESIGN.md` carries no dark-mode values, so emit no `@media (prefers-color-scheme: dark)` block. Run one cheap check over the CSS sources Step 1 found:
+
+```bash
+grep -rl 'prefers-color-scheme\|data-theme' <css sources>
+```
+
+On a hit, append a `gaps.md` entry: `DESIGN.md` carries no dark-mode values, so the DS's dark block stays empty until the edit flow (`EDIT.md`) adds them.
+
+**Semantic base styles need an explicit tie.** Emit an `h1`, `p`, or `code` rule only where `DESIGN.md`'s Typography section ties a role to that element in prose. Otherwise emit none. Append a `gaps.md` line saying open-designer imported no base styles, because `DESIGN.md` ties no role to an element.
+
+**The preview hook points at the brand colour.** `--odp-preview-accent` (2b.6) resolves to `--<prefix>-primary` when the frontmatter has `colors.primary`, and to the first colour in `colors` otherwise. That imported name is what 2b.6 and 2b.7 target for the Brand accent tweak – on an import there is no `--<prefix>-brand-default`.
+
+**The header comment names the source.** Keep the section comments from 2b.3a (Colors, Typography, and so on).
+
+```css
+/* tokens.css – design system <name> – imported from DESIGN.md, <ISO date> */
+
+:root {
+  /* Colors */
+  --<prefix>-primary: #b8422e;
+
+  /* Typography */
+  --<prefix>-font-body: Inter, sans-serif;
+  --<prefix>-text-body: 1rem;
+
+  /* Radius */
+  --<prefix>-radius-md: 8px;
+
+  /* Spacing */
+  --<prefix>-space-md: 16px;
+
+  /* Shadows and motion – from .impeccable/design.json */
+  --<prefix>-shadow-card: 0 1px 2px rgb(0 0 0 / 0.08);
+
+  /* open-designer preview hook */
+  --odp-preview-accent: var(--<prefix>-primary);
+}
+```
+
+**`theme.md` becomes a pointer.** The 2b.1 bullet writes a short doc instead of a second copy of the tokens. It carries three things and no fourth:
+
+- One line saying `DESIGN.md` is the token source.
+- The list of token groups imported – colours, typography, radius, spacing, plus shadows and motion when the sidecar was there.
+- Pointers to `DESIGN.md`'s prose sections – Colors, Typography, Elevation & Depth, Shapes – and a line saying its `components` key names the variants.
+
+Copy no value into `theme.md`. `tokens.css` holds them, and a second copy drifts.
 
 ### 2b.4 – Multi-surface check
 
@@ -102,7 +229,7 @@ If a dev server can start and `agent-browser` or similar infra is available, cap
 
 `preview/*.html` – one file per token group. Each page links **only** `tokens.css`. The viewer auto-injects canonical chrome styles (layout, typography, button group, swatch grid) when rendering previews, so do **not** emit a `_preview.css` or any preview-local stylesheet – chrome is owned by open-designer, not the DS.
 
-Emit at minimum: `colors.html`, `type.html`, `spacing.html`, `radius.html`, `shadows.html`, `motion.html`, `components.html`. `diff.html` and `charts.html` are optional – emit if the codebase has those primitives.
+Emit at minimum: `colors.html`, `type.html`, `spacing.html`, `radius.html`, `shadows.html`, `motion.html`, `components.html`. `diff.html` and `charts.html` are optional – emit if the codebase has those primitives. On an import with no sidecar, skip `shadows.html` and `motion.html` (2b.3b).
 
 Preview pages serve one goal: **a designer who has never seen this DS should understand, from a single page, what the token does in a real UI – not just what value it has.** A preview that renders a number as a coloured rectangle teaches nothing. A preview that renders the same number as padding on the actual component that consumes it teaches everything.
 
@@ -114,7 +241,7 @@ The sections below are the spine of this step. The class-hook appendix at the en
 
 #### Per-token-kind rubric
 
-Each token family has a different authentic shape. Use this table; if the token doesn't fit one of the rows, ask which family it belongs to before improvising.
+Each token family has a different authentic shape. Use this table; if the token doesn't fit one of the rows, ask which family it belongs to before improvising. On an import with no sidecar, skip `shadows.html` and `motion.html` (2b.3b), so the Shadows and Motion rows never apply.
 
 | Kind | Viz shape | Real-consumer mock required? | Anti-pattern |
 |---|---|---|---|
@@ -264,7 +391,7 @@ The chrome uses `var(--odp-preview-accent)` for all demoed shapes. Declare the m
 }
 ```
 
-If the DS exposes theme variants (`[data-theme="dark"]`, etc.), redeclare `--odp-preview-accent` in each theme block if the brand colour differs per mode. If the mapping is omitted entirely, samples fall back to a neutral slate.
+If the DS exposes theme variants (`[data-theme="dark"]`, etc.), redeclare `--odp-preview-accent` in each theme block if the brand colour differs per mode. If the mapping is omitted entirely, samples fall back to a neutral slate. On an import, the brand token is `--<prefix>-primary` and no `--<prefix>-brand-default` exists (2b.3b).
 
 #### Class-hook appendix
 
@@ -310,7 +437,7 @@ Canonical tweak set, one per card. These are suggestions – pick the ones that 
 - `radius` – single `slider` with `transform: "add"` (or `"scale"`) across all radius tokens. Label "Roundness". If the DS uses Tailwind's default scale (no custom radius tokens), skip this card's tweak.
 - `spacing` – single `slider` with `transform: "scale"` across core spacing tokens. Label "Density".
 - `type` – single `select` targeting the body-font token (e.g. `--<prefix>-font-body`); options are current + 1-2 alternates.
-- `shadows`, `motion`, `components` – leave `tweaks: []`. These cards are preview-only today.
+- `shadows`, `motion`, `components` – leave `tweaks: []`. These cards are preview-only today. Omit the `shadows` and `motion` entries on an import with no sidecar (2b.3b).
 
 Shape – mirrors `pages/index.json`. `variants` is optional; when omitted, a default variant pointing at `file` is synthesized:
 
@@ -381,6 +508,8 @@ Each page uses only DS tokens and components from `briefing/components.md`. Each
 If `routes.md` only supports one meaningful surface, ship one – honest shallowness beats fabricated depth. Skip the sibling-link rule in this case. Note the reason in `gaps.md`.
 
 ## Greenfield branch
+
+impeccable plays no part here. `document` reads code, and greenfield has none.
 
 Skip the codebase scan – there's nothing to scan. Ask for the depth via `AskUserQuestion`:
 

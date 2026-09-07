@@ -44,6 +44,13 @@ The routing is a two-question ladder, not a single "what do you want to do" free
 
 See `CREATE.md` for the full procedure – brownfield + greenfield + the 2/10/30 depth spectrum + the conventions sweep that produces `voice.md` / `rules.md` / `gaps.md`.
 
+In an existing codebase, one thing decides where the tokens come from: whether the impeccable plugin is present. impeccable is a separate Claude Code plugin. It writes `DESIGN.md`, a design document whose frontmatter holds the project's tokens, read from the code.
+
+- **impeccable present** – `tokens.css` comes from `DESIGN.md`, and the skill skips its own token scan. It runs the `/impeccable document` playbook first when the project has no `DESIGN.md` yet.
+- **impeccable absent** – `tokens.css` comes from the code scan, exactly as it always has.
+
+The briefing sweep runs either way, because impeccable writes nothing that stands in for it. `IMPECCABLE.md` holds the presence rule; `CREATE.md` §2b.0 holds the decision.
+
 **Always emit** (minimum viable DS):
 
 - `manifest.json`
@@ -90,7 +97,7 @@ Pull rows from each `design-systems/*/manifest.json`. Sort by `updatedAt` descen
 
 These carry over from the original init contract and are the reason open-designer stays honest:
 
-- **Never invent a token.** `tokens.css` only holds values that exist in the source (Tailwind config, `globals.css`, CSS modules, the named reference base for greenfield).
+- **Never invent a token.** `tokens.css` only holds values that exist in the source, copied verbatim. With impeccable present, the source is `DESIGN.md`'s frontmatter plus the `.impeccable/design.json` sidecar. Without it, the source is the Tailwind config, `globals.css`, CSS modules, or the named reference base for greenfield.
 - **Never invent a rule.** `rules.md` captures rules the project already follows, backed by concrete evidence (files, commits, `DESIGN_PRINCIPLES.md` if present). If you're unsure, it goes in `gaps.md`, not `rules.md`.
 - **Never invent voice.** `voice.md` sample strings are verbatim from the codebase (copy, JSX text, button labels). If none exist yet (greenfield), write the doc as "decide together" with slots the user fills.
 - **`gaps.md` is the safety valve.** When a token, font, asset, or convention *looks* like a rule but isn't pinned in the code, it goes here with a one-line **Why:** so the `design` skill knows to treat it as a flagged substitution, not an allow-listed token.
@@ -102,5 +109,6 @@ If you're tempted to write something that isn't backed by source, stop and ask t
 - `CREATE.md` – brownfield + greenfield procedures, 2/10/30-minute depth spectrum, conventions sweep.
 - `EDIT.md` – selection-payload handling, Promote handling, conversational edits.
 - `CONVENTIONS.md` – how the conventions sweep reads README, `DESIGN_PRINCIPLES.md`, `globals.css` comments, sample JSX strings to populate `voice.md` / `rules.md` / `gaps.md`.
+- `IMPECCABLE.md` – the impeccable presence rule, the version floor, how to call `detect` and `document`, and what `DESIGN.md` holds.
 - `PAGES.md` – DS playable-page templates (landing, dashboard, settings, modal, empty state) and the flexible 1–N pages guidance.
 - `../design/REFERENCES.md` – the vetted base list (shadcn / Material / kokonutui / Tremor / DaisyUI). Reused for greenfield depth choices; do not re-audit.
