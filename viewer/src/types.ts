@@ -183,6 +183,7 @@ export interface DesignSystemManifest {
   updatedAt?: string;
   shippedAt?: string;
   shippedTo?: string;
+  shippedTokens?: string;
 }
 
 export interface DesignSystemIndexPages {

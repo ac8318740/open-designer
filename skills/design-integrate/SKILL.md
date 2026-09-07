@@ -12,7 +12,7 @@ Turns a finalized design from `.open-designer/designs/<name>/` into real compone
 
 The skill is a dynamic dispatcher – it resolves the DS context, explores, proposes a path, asks for approval, then executes.
 
-It harmonizes softly with spechub: if spechub is installed it uses `/spechub:propose`, `/spechub:design`, `/spechub:implement`, or `/spechub:implement-quick`. If spechub is absent it orchestrates the same agent types (`test-writer`, `task-executor`, `task-checker`) directly.
+It harmonizes softly with spechub: if spechub is installed it uses `/spechub:propose`, `/spechub:design`, `/spechub:implement`, or `/spechub:implement-quick`. If spechub is absent it orchestrates the same agent types (`test-writer`, `task-executor`, `task-checker`) directly. It also runs impeccable's design detector over the ported files itself, the same check spechub's task-checker runs.
 
 Integration is **one design at a time**.
 
@@ -32,7 +32,8 @@ If the user names a specific design, use that. Otherwise pick the design under `
 
 - **Never modify `.open-designer/designs/<name>/`** during integration, except to add `chosen.shippedAt` at the very end.
 - **Never modify `.open-designer/design-systems/<ds>/`** during integration, except:
-  - `manifest.shippedAt` + `manifest.shippedTo` after Stage 1.
+  - `manifest.shippedAt`, `manifest.shippedTo`, and `manifest.shippedTokens` after Stage 1.
+  - `manifest.shippedAt` again after a re-ship, and `manifest.shippedTokens` when an older manifest has none – `shippedTo` never changes after the first ship.
   - Append-only `briefing/gaps.md` entries when a real gap is discovered during integration.
 - **Never delete drafts** without explicit user confirmation.
 - **Always show the path recommendation before executing.**
@@ -71,14 +72,32 @@ Run on every integration, before any exploration agents fire.
 
 ### Stage 1 – Ship the DS (once per DS)
 
-If `manifest.shippedAt` is absent or `shippedTo` is missing, run Stage 1 before any per-design work. Otherwise skip to Stage 2.
+If `manifest.shippedAt` is absent or `shippedTo` is missing, run Stage 1 before any per-design work.
 
-Use `AskUserQuestion` to confirm Stage 1 should run. Then run a clarification round specifically for porting the DS:
+If both exist, check whether the DS moved ahead of the codebase. Read `manifest.updatedAt` on the leaf DS and on every parent in the `extends` chain. Any one of them newer than the leaf's `shippedAt` means the DS changed after it shipped.
+
+A Promote click in the viewer is the usual cause. Propose a tokens-only re-ship and confirm it with `AskUserQuestion`:
+
+- **Re-ship the tokens now** – the recommended default. Run "Stage 1, again" below, then carry on to Stage 2.
+- **Skip the re-ship** – ship the design against the tokens already in the codebase. Warn in one line that those tokens are older than the DS.
+
+Otherwise skip straight to Stage 2.
+
+For a first ship, use `AskUserQuestion` to confirm Stage 1 should run. Then run a clarification round specifically for porting the DS:
 
 - **Where does `tokens.css` land?** Suggest a location inferred from the codebase:
   - Next.js / Tailwind – merge into `globals.css`, or into `src/styles/tokens.css` imported from `globals.css`.
   - Vite + plain CSS – `src/styles/tokens.css`.
   - Component library using CSS-in-JS – ask; this may need a Tailwind preset or a theme module.
+
+  The answer becomes `manifest.shippedTokens`, the token file's path relative to `shippedTo`. Write the tokens between two marker comments so a later re-ship can replace them in place:
+
+  ```
+  /* open-designer tokens: <ds> – start */
+  /* open-designer tokens: <ds> – end */
+  ```
+
+  The markers go in either way – tokens in their own file, or tokens merged into an existing `globals.css`.
 - **Font setup.** `gaps.md` lists font substitutions and self-host needs. Confirm the framework's font-loading mechanism (`next/font`, `@font-face` + `woff2`, link tags). Wire accordingly.
 - **Voice + rules destination.** Where should `voice.md` + `rules.md` content live in the project's docs? Suggest `THEME.md`, `docs/design-system.md`, or append to an existing `DESIGN_PRINCIPLES.md`.
 - **Icon library.** If `rules.md` pins an icon library (e.g., Lucide), confirm the dep is installed; if not, offer to add it.
@@ -86,9 +105,68 @@ Use `AskUserQuestion` to confirm Stage 1 should run. Then run a clarification ro
 
 Execute Stage 1 with the full resolved bundle + the clarification answers as input to the executor (same spechub/no-spechub split as Stage 2 below, but tuned: test-writer is typically unnecessary for a DS port – no new behavior, only tokens + docs).
 
-After Stage 1 succeeds:
+After Stage 1 succeeds, write three fields to the DS's `manifest.json`:
 
-- Write `manifest.shippedAt = <now ISO>` and `manifest.shippedTo = <absolute path to project>` to the DS's `manifest.json`. These are the only DS writes this skill is allowed to make.
+- `shippedAt` – the current ISO timestamp.
+- `shippedTo` – the absolute path to the project.
+- `shippedTokens` – the shipped token file's path, relative to `shippedTo`.
+
+A re-ship later stamps `shippedAt` again and fills `shippedTokens` when an older manifest has none. `shippedTo` never changes after the first ship. Together these are the only DS writes this skill is allowed to make.
+
+Then run "After tokens land in the codebase" below.
+
+### After tokens land in the codebase
+
+A first ship and a re-ship both put new tokens in the code, and `DESIGN.md` has to follow them. Decide impeccable's presence with the rule in `../design-system/IMPECCABLE.md`, then take one of three branches:
+
+- impeccable present and spechub absent – invoke `/impeccable document` with the Skill tool and answer "refresh"
+- spechub present – do nothing, because spechub's commit-time sync refreshes `DESIGN.md`
+- impeccable absent – do nothing
+
+`document` asks refresh, overwrite, or merge when `DESIGN.md` already exists, and no flag skips that question. It writes the file and asks nothing when the project has no `DESIGN.md` yet. Never write `DESIGN.md` yourself.
+
+### Stage 1, again – re-ship the tokens
+
+A re-ship carries the DS's current tokens into the codebase and touches nothing else. The voice and rules docs, fonts, icons, and assets stay as the first Stage 1 left them.
+
+The re-ship is one hop in a loop that starts at the viewer's Promote button and ends back at the DS:
+
+```mermaid
+flowchart LR
+    P["Promote a token<br/>viewer"] --> T["Design system tokens<br/>tokens.css"]
+    T --> R["Re-ship the tokens<br/>Stage 1, again"]
+    R --> C["Codebase tokens<br/>shippedTo + shippedTokens"]
+    C --> D["Write the doc from the code<br/>/impeccable document"]
+    D --> M["Design doc<br/>DESIGN.md"]
+    M --> I["Import a design system<br/>/design-system"]
+    I --> T
+```
+
+1. **Fill in a missing `shippedTokens`.** A manifest with `shippedAt` and no `shippedTokens` shipped under an older version of this skill. Ask the user which file holds the DS's tokens, then stamp that path relative to `shippedTo`.
+
+2. **Find the marker block.** Read `<shippedTo>/<shippedTokens>` and look for the two comments Stage 1 writes:
+
+    ```
+    /* open-designer tokens: <ds> – start */
+    /* open-designer tokens: <ds> – end */
+    ```
+
+    No markers means the file shipped before the markers existed. Show the user the block you read as the DS's tokens and confirm it with `AskUserQuestion`. Add the markers around the replacement on this write.
+
+3. **Build the replacement.** Take the resolved `tokens.css` from the Stage 0 bundle at `/tmp/od-resolved-<design>-<ts>/tokens.css` – parent first, child last.
+
+4. **Write it through the quick path.** A token rewrite is a visual change with no backend risk:
+
+    - spechub present – `/spechub:implement-quick`, under "Quick path + spechub" in `SPECHUB-MAP.md`
+    - spechub absent – "Quick path + no spechub" in the same file, which runs task-executor, then task-checker, then "Design detector (no spechub)"
+
+    Tell the executor to replace only the text between the markers and to leave every other line alone.
+
+5. **Stamp the manifest.** Write `manifest.shippedAt = <now ISO>` again. Change nothing else – step 1 already settled `shippedTokens`.
+
+6. **Let `DESIGN.md` follow the code.** Run "After tokens land in the codebase" above.
+
+7. **Carry on to Stage 2.** The re-ship covers the tokens, and the design itself still needs shipping.
 
 ### Stage 2 – Ship the design
 
@@ -175,12 +253,18 @@ Do NOT paste the whole HTML into the prompt. Point to paths.
 
 #### Step 8 – Verify (extended)
 
-`agent-browser` snapshot per route **plus a rules-lint pass**:
+Three checks, in this order. The first carries a verdict forward from Step 7. The other two read the rendered page.
 
-- Compare each shipped surface against `rules.md`. Flag obvious violations (gradient where rules forbid; emoji in chrome where banned; second accent hue where rule says one).
-- Report any `voice.md` violations in shipped strings (Title Case where sentence case is required, etc.).
+1. **Design detector.** Already ran as the last item of Step 7, per "Design detector (no spechub)" in `SPECHUB-MAP.md`. Carry its verdict into this step; never run it again here. With spechub present its task-checker ran it; with impeccable absent Step 7 skipped it.
 
-These are warnings, not failures – the user decides whether to fix.
+2. **`agent-browser` snapshot per route.** Compare the live route against `resolved/<pageId>.html`.
+
+3. **Rules-lint pass.**
+
+    - Compare each shipped surface against `rules.md`. Flag obvious violations (gradient where rules forbid; emoji in chrome where banned; second accent hue where rule says one).
+    - Report any `voice.md` violations in shipped strings (Title Case where sentence case is required, etc.).
+
+Checks 2 and 3 produce warnings, not failures – the user decides whether to fix. A firm detector finding is not a warning; Step 7 sends it back to `task-executor`.
 
 #### Step 9 – Feedback loop into the DS
 
@@ -197,16 +281,23 @@ POST /data/designs/<name>/finalize
 
 The launcher writes the timestamp atomically and returns the updated chosen block. This is the ONLY write to `designs/<name>/` this skill is allowed to make.
 
+Do not stamp when a page's detector verdict run ended on exit 2 (Step 7). Settle those findings with the user first.
+
 Do NOT delete drafts.
 
 #### Step 11 – Report
 
 End with a short report:
 
-- **DS shipped** (if Stage 1 ran): where tokens.css landed, font setup, doc location.
+- **DS shipped** (if Stage 1 ran): where tokens.css landed, font setup, doc location. Say "DS re-shipped: tokens only" instead when Stage 1 ran again, and name the token file.
 - **Pages shipped**: each page, its target route, full or quick path.
 - **Files modified**: in the codebase, not the design folder.
 - **Verification**: screenshots if produced, rules-lint warnings if any.
+- **Design detector**: the verdict per page, the firm findings `task-executor` fixed, and every advisory as a note. Use these words for the other outcomes:
+    - "skipped: impeccable absent", or "run by spechub's task-checker", when the skill did not run the detector itself
+    - "skipped: nothing to scan" when the file list came out empty
+    - "warning: detector could not run (<what it printed>)" for exit 1 or any other exit
+    - "unresolved: <n> firm findings, user decides" for a second exit 2
 - **Gaps appended** (if any): the specific `gaps.md` entries you added.
 - **Cleanup offer**: "Want me to delete the other variants now? They're at `.open-designer/designs/<name>/`. Default: keep them."
 
