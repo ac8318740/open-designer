@@ -20,8 +20,8 @@ Releases publish from CI. Do not publish from your laptop.
 3. Tag and push:
 
 ```sh
-git tag v0.7.4
-git push origin v0.7.4
+git tag v0.7.5
+git push origin v0.7.5
 ```
 
 `.github/workflows/release.yml` then syncs the version, builds the viewer from

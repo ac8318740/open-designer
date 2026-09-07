@@ -9,6 +9,7 @@ No hosted backend. No API key billed by a third party. No cloud canvas. Just fil
 - A `design-system` skill that captures the project's tokens, voice, rules, and gaps as a first-class artifact under `.open-designer/design-systems/<name>/` with a runnable `tokens.css` and playable pages.
 - A `design` skill that teaches Claude how to consume the DS on every iteration, write pixel-perfect HTML designs, and iterate based on pasted feedback.
 - A `design-integrate` skill that ports a finalized design into the real codebase – DS first, then per-page surfaces.
+- Optional use of the [impeccable](https://github.com/pbakaus/impeccable) plugin. With it present, `design-system` imports `tokens.css` from impeccable's `DESIGN.md`. `design-integrate` re-ships tokens after a viewer promote, and runs impeccable's detector on ported pages when spechub is absent. Without impeccable every skill runs as before.
 - A static viewer with two modes (Designs / Design systems). Iterate on designs or on the DS itself by selecting elements and pasting feedback.
 - An element picker overlay that captures a stable selector, the outer HTML, and key computed styles, then puts a Markdown payload on your clipboard.
 - A zero-dependency Node launcher that serves the viewer and the data folder from the same origin.
