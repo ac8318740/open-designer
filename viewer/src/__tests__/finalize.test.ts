@@ -5,6 +5,7 @@ import {
   sanitizeEntry,
   stampPromote,
   validateDesignIndex,
+  shouldIgnoreFilename,
 } from "../../../launcher/finalize.mjs";
 
 describe("sanitizeEntry", () => {
@@ -199,5 +200,18 @@ describe("stampPromote", () => {
   it("returns only updatedAt and promotedAt for an empty object input", () => {
     const result = stampPromote({}, now);
     expect(result).toEqual({ updatedAt: now, promotedAt: now });
+  });
+});
+
+describe("shouldIgnoreFilename", () => {
+  it("skips atomic-write temp files, editor swap files, and OS metadata", () => {
+    for (const name of ["index.json.tmp", ".DS_Store", "a.swp", "a.swo", "home.html~", "", undefined]) {
+      expect(shouldIgnoreFilename(name)).toBe(true);
+    }
+  });
+  it("reports real design files", () => {
+    for (const name of ["index.json", "home.html", "tokens.css", "logo.png"]) {
+      expect(shouldIgnoreFilename(name)).toBe(false);
+    }
   });
 });
