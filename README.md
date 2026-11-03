@@ -22,10 +22,10 @@ This plugin ships through the `ac-agentic-coding` marketplace. After adding the 
 
 ### Pi
 
-Native Pi resources first ship in `open-designer-viewer@0.7.8`. The command below works only after a maintainer approves that version's npm stage; 0.7.7 and earlier contain the viewer, not the Pi workflows.
+Install the viewer and native Pi workflows together:
 
 ```sh
-pi install npm:open-designer-viewer@0.7.8
+pi install npm:open-designer-viewer
 ```
 
 Add `--local` to install only for the current project. Restart Pi or run `/reload`, then use:
