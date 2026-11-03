@@ -1,61 +1,36 @@
 #!/usr/bin/env node
-// Release the open-designer npm package.
-//
-// Steps:
-//   1. Sync version from .claude-plugin/plugin.json → package.json
-//   2. Build the viewer (vite build)
-//   3. Run `npm publish`
-//
-// Auth:
-//   - If NPM_TOKEN is set, a temporary .npmrc is written for the publish step.
-//   - Otherwise, `npm publish` uses the logged-in session from `npm login`.
+// Local staging is explicit; CI is the normal OIDC release path.
+import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
-import { spawnSync } from "node:child_process";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const pluginRoot = resolve(__dirname, "..");
-const tempNpmrc = resolve(pluginRoot, ".npmrc.release");
-
-function run(cmd, args, opts = {}) {
-  console.log(`\n$ ${cmd} ${args.join(" ")}`);
-  const result = spawnSync(cmd, args, {
-    cwd: pluginRoot,
-    stdio: "inherit",
-    shell: process.platform === "win32",
-    ...opts,
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+function run(command, args, capture = false) {
+  console.log(`\n$ ${command} ${args.join(' ')}`);
+  const result = spawnSync(command, args, {
+    cwd: root,
+    encoding: 'utf8',
+    stdio: capture ? ['inherit', 'pipe', 'inherit'] : 'inherit',
+    shell: process.platform === 'win32',
   });
-  if (result.status !== 0) {
-    process.exit(result.status ?? 1);
-  }
+  if (result.error) throw result.error;
+  if (result.status !== 0) process.exit(result.status ?? 1);
+  return result.stdout;
 }
 
-function cleanup() {
-  if (existsSync(tempNpmrc)) rmSync(tempNpmrc);
+try {
+  run('node', ['scripts/sync-version.mjs', '--check']);
+  run('npm', ['test']);
+  run('npm', ['run', 'build:viewer']);
+  run('npm', ['--prefix', 'viewer', 'test', '--', '--run']);
+  run('npm', ['--prefix', 'viewer', 'exec', '--', 'tsc', '--noEmit', '-p', 'viewer/tsconfig.json']);
+  const [{ filename }] = JSON.parse(run('npm', ['pack', '--ignore-scripts', '--json'], true));
+  run('node', ['scripts/check-packed.mjs', filename]);
+  run('npm', ['stage', 'publish', filename, '--access', 'public']);
+  const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
+  console.log(`\nStaged ${pkg.name}@${pkg.version}. Not published until a maintainer approves with npm 2FA.`);
+} catch (error) {
+  console.error(`Staging failed: ${error.message}`);
+  process.exitCode = 1;
 }
-
-process.on("exit", cleanup);
-process.on("SIGINT", () => { cleanup(); process.exit(130); });
-
-run("node", ["scripts/sync-version.mjs"]);
-run("npm", ["run", "build:viewer"]);
-
-const publishArgs = ["publish", "--access", "public"];
-if (process.env.NPM_TOKEN) {
-  writeFileSync(
-    tempNpmrc,
-    `//registry.npmjs.org/:_authToken=${process.env.NPM_TOKEN}\n`,
-  );
-  publishArgs.push("--userconfig", tempNpmrc);
-  console.log("Using NPM_TOKEN for publish auth.");
-} else {
-  console.log("No NPM_TOKEN set – using your logged-in npm session.");
-}
-
-run("npm", publishArgs);
-
-const pkg = JSON.parse(readFileSync(resolve(pluginRoot, "package.json"), "utf8"));
-console.log(`\nPublished ${pkg.name}@${pkg.version}`);
-console.log("Don't forget to commit the version bump and any synced package.json changes.");

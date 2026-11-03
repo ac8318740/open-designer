@@ -3,14 +3,18 @@ name: design
 description: Local design loop. Write pixel-perfect HTML designs plus variants under .open-designer/designs/, accept pasted element-selection payloads from the viewer to iterate, and consume the project's design system (tokens, voice, rules, gaps) on every iteration. Use when the user asks to design, redesign, or iterate on a page or component visually.
 ---
 
+## Host setup
+
+Read `../HOST.md` before starting. Its host mappings apply to every companion below.
+
 ## What this skill does
 
-A loop with three actors – Claude, a folder on disk, and a static viewer in the browser.
+A loop with three actors: the coding assistant, a folder on disk, and a static viewer in the browser.
 
-1. Claude reads the project's active **design system** under `.open-designer/design-systems/<ds>/` (tokens, briefing docs, playable pages) and uses it as the allow-list + voice + rules contract for every design.
-2. Claude writes a pixel-perfect replica of the target page plus a few variants as standalone HTML files under `.open-designer/designs/<design-name>/`.
-3. The user opens the local viewer, clicks an element, types a request, and pastes the resulting Markdown payload back into Claude Code.
-4. Claude edits the target design. Repeat until the user picks a winner, then port the chosen variant into the real codebase via `/design-integrate`.
+1. The assistant reads the project's active **design system** under `.open-designer/design-systems/<ds>/` (tokens, briefing docs, playable pages) and uses it as the allow-list + voice + rules contract for every design.
+2. The assistant writes a pixel-perfect replica of the target page plus a few variants as standalone HTML files under `.open-designer/designs/<design-name>/`.
+3. The user opens the local viewer, clicks an element, types a request, and pastes the resulting Markdown payload back into the coding session.
+4. The assistant edits the target design. Repeat until the user picks a winner, then port the chosen variant into the real codebase via `/design-integrate`.
 
 No hosted backend. No file watchers. No selection bridges. Just files and the OS clipboard.
 
@@ -258,6 +262,8 @@ For each request:
 
     ```
     npx open-designer-viewer
+
+    On Pi, use the absolute bundled launcher path from `../HOST.md` instead of `npx`.
     ```
 
     Picks a free port, serves the viewer at `/` and `.open-designer/` at `/data/`, and opens the browser. Override the port with `OPEN_DESIGNER_PORT=5200 npx open-designer-viewer`. Skip auto-open with `OPEN_DESIGNER_NO_OPEN=1 npx open-designer-viewer`.

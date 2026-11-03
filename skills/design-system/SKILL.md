@@ -3,6 +3,10 @@ name: design-system
 description: Create, edit, and list design systems under .open-designer/design-systems/. A design system is a first-class artifact – real tokens.css, living briefing docs, preview cards, and playable pages – that designs consume via a designSystem reference. Use when the user asks to set up a design system, extract one from an existing codebase, add one to a greenfield project, extend an existing system, or tweak its tokens in the viewer.
 ---
 
+## Host setup
+
+Read `../HOST.md` before starting. Its host mappings apply to every companion below.
+
 ## What this skill does
 
 Turns the project's visual rules into a file-backed, multi-instance, viewable artifact.
@@ -70,7 +74,7 @@ Design system `<name>` is ready. Open the viewer and switch to Design systems mo
   npx open-designer-viewer
 ```
 
-Run it from the repo root.
+Run it from the repo root. On Pi, use the installed package's absolute launcher path instead of `npx`, as described in `../HOST.md`.
 
 ## Edit flow
 

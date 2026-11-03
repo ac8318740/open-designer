@@ -1,6 +1,6 @@
 # Triage paths
 
-Two paths. The goal is to match discipline to actual risk, not to run every design through the full pipeline.
+Two paths. The goal is to match discipline to actual risk, not to run every design through the full pipeline. Apply `../HOST.md` to all agent roles below: use authorized delegation when available, otherwise sequential roles without claiming independent verification.
 
 **Triage is per page.** A multi-page design can take different paths for different pages – e.g. the list takes the quick path (pure UI reshuffle over existing data) while the detail takes the full pipeline (introduces a new table). Mix freely; don't average.
 
