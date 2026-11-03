@@ -11,6 +11,8 @@ This file holds the one presence rule and the facts about those two parts. `CREA
 
 impeccable is optional. Every skill that uses it decides presence with this rule and nothing else.
 
+**Pi:** use only the current session's available impeccable skill/playbook and its documented detector. If the required capability is unavailable or disabled for this project, take the absent branch. Do not inspect Claude's registry or run its spechub CLI to infer Pi availability. Invoke a loaded playbook by reading its `SKILL.md`, per `../HOST.md`; never assume Pi has a `Skill` tool. The remaining detection steps and registry version lookup are for Claude Code only.
+
 1. Run the spechub design gate when the spechub CLI exists:
 
     ```bash

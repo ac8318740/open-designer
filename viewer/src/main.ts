@@ -46,7 +46,6 @@ import { buildPromotePrompt } from "./sync-prompts";
 // DS's token demo cards share the same clean devtool look. Swatches still
 // pull their colours from each DS's tokens.css, but the layout/typography
 // of the preview itself lives here in the viewer.
-// @ts-expect-error – Vite's `?raw` import returns a string at runtime.
 import PREVIEW_CHROME_CSS from "./preview-chrome.css?raw";
 
 const DATA_ROOT = "/data";

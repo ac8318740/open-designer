@@ -1,6 +1,6 @@
 # Exploration agents
 
-Explore subagents run in parallel before triage. Each one returns a short, structured summary – not a dump of raw search output.
+Read `../HOST.md` for the host role mapping. With authorized delegation, Explore subagents run in parallel before triage. Otherwise perform each exploration brief sequentially, preserving its separate summary. Each one returns a short, structured summary – not a dump of raw search output.
 
 Agent 1 runs **once per integration** (the DS bundle is shared). Agents 2 and 3 run **once per page**.
 

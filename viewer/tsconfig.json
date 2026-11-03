@@ -5,6 +5,7 @@
     "moduleResolution": "Bundler",
     "strict": true,
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"],
     "isolatedModules": true,
     "esModuleInterop": true,
     "skipLibCheck": true,

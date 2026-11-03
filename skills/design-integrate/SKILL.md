@@ -3,6 +3,10 @@ name: design-integrate
 description: Port a finalized open-designer design into the codebase. Use when the user says "integrate the design", "implement the chosen design", "port this into the codebase", "ship the reading-streaks design", or otherwise asks to turn a chosen variant into real components. Integration is two-stage – ship the design system into the codebase first (once per DS), then ship designs against it. Triages per-page, harmonizes softly with spechub if present, and always asks before executing.
 ---
 
+## Host setup
+
+Read `../HOST.md` before starting. Its host mappings apply to every companion below, including delegation and approval gates.
+
 ## What this skill does
 
 Turns a finalized design from `.open-designer/designs/<name>/` into real components, routes, and (if needed) backend plumbing in the codebase. Integration has two stages:
@@ -188,7 +192,7 @@ Per-page triage and execution. The design's chosen variants + tweaks are the spe
 
 Agent 1 (DS context) runs **once** per integration.
 
-**Agents 2 and 3 run per page.** Launch one Agent 2 + one Agent 3 per page, all in parallel with Agent 1 in a single Agent tool batch.
+**Agents 2 and 3 run per page.** With authorized delegation, launch one Agent 2 + one Agent 3 per page, all in parallel with Agent 1 in a single available delegation-tool batch. Otherwise perform the exploration roles sequentially per `../HOST.md`.
 
 - **Agent 1 – DS context** (one run). Reads the resolved bundle from `/tmp/od-resolved-<design>-<ts>/`. Reports: tokens by name (not value), voice rules, structural rules, gaps to avoid.
 - **Agent 2 – codebase overlap** (per page). Cross-references DS `briefing/components.md` against actual codebase components. Reports: "design uses a button matching `preview/components.html#primary` → reuse `src/components/ui/button.tsx`."
@@ -208,7 +212,7 @@ Map each page to **full pipeline** or **quick path**. Paths are heterogeneous ac
 
 #### Step 4 – Spechub awareness check
 
-Look for `spechub/project.yaml`, the `/spechub:*` slash commands, or the plugin cache. If found → soft integration mode. See `SPECHUB-MAP.md`.
+Use the host-specific detection rule in `SPECHUB-MAP.md`. On Pi, only commands/skills available in the current session count; a project file or Claude plugin cache alone does not.
 
 #### Step 5 – Propose to the user
 

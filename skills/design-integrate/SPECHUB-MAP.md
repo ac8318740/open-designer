@@ -4,7 +4,9 @@ Soft integration. If spechub is present, use its slash commands and agents. If n
 
 ## Detection
 
-Check in this order:
+**Pi:** soft integration requires the commands/skills needed for the selected path to be available in the current session. Neither `spechub/project.yaml` nor a Claude plugin cache proves availability. If any required command is missing, use the no-spechub path and the role mapping in `../HOST.md`. Do not invoke unavailable tools or install integrations implicitly.
+
+**Claude Code:** check in this order:
 
 1. `spechub/project.yaml` exists somewhere up the tree from the working directory.
 2. Slash commands `/spechub:propose`, `/spechub:design`, `/spechub:implement`, `/spechub:implement-quick` are listed in the current session's available slash commands.
@@ -89,7 +91,7 @@ and rules.md.
 
 ## Full pipeline + no spechub
 
-Orchestrate subagents directly.
+Use authorized available subagents, or perform these roles sequentially per `../HOST.md`. Sequential checking is not independent review; stop for a reviewer when independence is required.
 
 1. **test-writer agent** (`subagent_type: "spechub:test-writer"` if available, else `general-purpose`):
    ```
@@ -128,7 +130,7 @@ Orchestrate subagents directly.
 
 ## Quick path + no spechub
 
-Skip test-writing for purely visual pieces.
+Skip test-writing for purely visual pieces. Use the same host role mapping from `../HOST.md`; do not skip checks or required independent review when delegation is unavailable.
 
 1. **task-executor** directly:
    ```
