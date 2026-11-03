@@ -66,7 +66,7 @@ test('shared workflows read host rules before relying on Claude-only tools', asy
 test('release workflow stages a verified tarball, never directly publishes or approves', async () => {
   const workflow = await read('.github/workflows/release.yml');
   assert.match(workflow, /pull_request:/);
-  assert.match(workflow, /npm stage publish .*\.tgz/);
+  assert.match(workflow, /npm stage publish "\$\{packages\[0\]\}"/);
   assert.doesNotMatch(workflow, /run: npm publish|npm stage approve/);
   assert.match(workflow, /actions\/upload-artifact@/);
   assert.match(workflow, /actions\/download-artifact@/);

@@ -84,7 +84,7 @@ jobs:
           EXPECTED_SHA256: ${{ needs.verify.outputs.sha256 }}
         run: |
           shopt -s nullglob
-          packages=(release/*.tgz)
+          packages=(./release/*.tgz)
           test "${#packages[@]}" -eq 1
           echo "$EXPECTED_SHA256  ${packages[0]}" | sha256sum --check --strict
-          npm stage publish release/*.tgz --access public
+          npm stage publish "${packages[0]}" --access public
