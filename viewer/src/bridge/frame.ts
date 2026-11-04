@@ -288,17 +288,17 @@ import type { Mark, Restore, Selection, SelectionComponent, TokenSheet } from ".
     const style = document.createElement("style");
     style.setAttribute("data-od-bridge", "");
     style.textContent = `
-      #${HOVER_ID} { position: fixed; pointer-events: none; border: 2px dashed #f59e0b;
-        background: rgba(245, 158, 11, 0.06); z-index: 2147483646; display: none; }
+      #${HOVER_ID} { position: fixed; box-sizing: border-box; pointer-events: none; outline: 2px dashed #f59e0b;
+        outline-offset: 2px; background: rgba(245, 158, 11, 0.06); z-index: 2147483646; display: none; }
       body:not(.od-picker-on) #${HOVER_ID} { display: none !important; }
       [${SELECTED_ATTR}] { outline: 2px solid #f59e0b !important; outline-offset: 2px; position: relative; }
       [${MARK_ATTR}] { position: relative; }
       [${FLASH_ATTR}] { outline: 3px solid #3b82f6 !important; outline-offset: 2px; }
-      .${BADGE_CLASS}, .${MARK_CLASS} { position: absolute; top: -10px; left: -10px; min-width: 22px; height: 22px;
+      .${BADGE_CLASS}, .${MARK_CLASS} { position: absolute; top: -3px; left: -3px; transform: translate(-100%, -100%); min-width: 22px; height: 22px;
         padding: 0 4px; box-sizing: border-box; border-radius: 11px; background: #f59e0b; color: #1f1300;
         font: 600 12px/22px ui-sans-serif, system-ui, sans-serif; text-align: center;
         z-index: 2147483647; pointer-events: none; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25); }
-      .${MARK_CLASS} { background: #3b82f6; color: #fff; left: auto; right: -10px; pointer-events: auto; cursor: pointer; }
+      .${MARK_CLASS} { background: #3b82f6; color: #fff; left: auto; right: -3px; transform: translate(100%, -100%); pointer-events: auto; cursor: pointer; }
     `;
     (document.head ?? document.documentElement).appendChild(style);
     hover = document.createElement("div");
