@@ -2,14 +2,16 @@ import { buildPayload, type PayloadContext } from "./clipboard";
 import { mountComposer } from "./composer";
 import { MAX_SELECTIONS, Picker } from "./picker";
 import {
-  applyTweaksToIframe,
   buildInitialValues,
   isPanelOpen,
   loadStoredValues,
   renderTweaksPanel,
   savePanelOpen,
   saveStoredValues,
+  tweakPayload,
 } from "./tweaks";
+import { BridgeHost } from "./bridge/host";
+import type { FrameMessage, Restore, TokenSheet } from "./bridge/protocol";
 import type {
   Approvals,
   Chosen,
@@ -42,7 +44,7 @@ import {
 } from "./surface-state";
 import { computeTokenDivergences, loadTokensMap } from "./token-sync";
 import { buildPromotePrompt } from "./sync-prompts";
-// Canonical preview chrome – injected into preview/*.html iframes so every
+// Canonical preview chrome – sent to preview/*.html frames so every
 // DS's token demo cards share the same clean devtool look. Swatches still
 // pull their colours from each DS's tokens.css, but the layout/typography
 // of the preview itself lives here in the viewer.
@@ -65,7 +67,7 @@ const CORNERS: Corner[] = ["br", "bl", "tr", "tl"];
 // Timing knobs, kept together so tuning doesn't hunt across the file.
 const DIVERGENCE_DEBOUNCE_MS = 100;
 const SYNC_RECOMPUTE_DEBOUNCE_MS = 100;
-const STYLESHEET_WAIT_MS = 300;
+const SNAPSHOT_WAIT_MS = 300;
 const TOAST_VISIBLE_MS = 2200;
 
 interface NormalizedDesign {
@@ -136,8 +138,28 @@ const pageHistory: Array<{ pageId: string; variantId: string }> = [];
 // Used by the refresh button and hot reload; navigation leaves it unset so
 // the same-document short-circuit in selectVariant still avoids flicker.
 interface NavOpts { fade?: boolean; reload?: boolean }
-// Scroll offset captured by a same-document reload that is still loading.
-let reloadScroll: { x: number; y: number } | null = null;
+// The frame document the host is loading or showing. `restore` is what the
+// next `init` hands back after a reload of the same URL.
+interface FrameLoad {
+  url: string;
+  tweaks: Tweak[];
+  restore?: Restore;
+  sheets: Promise<TokenSheet[]>;
+  stateWarned?: boolean;
+}
+let currentLoad: FrameLoad | null = null;
+// Last scroll offset the frame reported, kept for a reload of the same URL.
+let lastScroll: { url: string; x: number; y: number } | null = null;
+// Bumped on every selectVariant so a late snapshot can't start a stale load.
+let navSeq = 0;
+// Combos the frame forwards; each maps to one named host action.
+const FRAME_KEYS: Record<string, () => void> = {
+  "mod+shift+k": () => togglePicker(),
+  "mod+shift+comma": () => toggleTweaksPanel(),
+  escape: () => {
+    if (document.body.classList.contains("fullscreen-mode")) exitFullscreen();
+  },
+};
 
 // DOM refs ------------------------------------------------------------------
 
@@ -173,6 +195,19 @@ const composerInput = document.getElementById("composer-input") as HTMLTextAreaE
 const composerCopy = document.getElementById("composer-copy") as HTMLButtonElement;
 const composerClear = document.getElementById("composer-clear") as HTMLButtonElement;
 
+const bridge = new BridgeHost({
+  frame: iframe,
+  onMessage: onFrameMessage,
+  onClosed: () => {
+    iframe.classList.remove("fading");
+    showToast("This example navigated away and was stopped.");
+  },
+  onVersionMismatch: () => {
+    iframe.classList.remove("fading");
+    showToast("This example was built for a different OpenDesigner version; rebuild it");
+  },
+});
+
 // Bootstrap -----------------------------------------------------------------
 
 const renderComposer = mountComposer({
@@ -182,8 +217,11 @@ const renderComposer = mountComposer({
   copyBtn: composerCopy,
   clearBtn: composerClear,
   getSelections: () => picker.getSelections(),
-  onRemove: (id) => picker.removeById(id),
-  onClear: () => picker.clearAll(),
+  onRemove: (id) => {
+    picker.removeById(id);
+    bridge.send("selection-remove", { id });
+  },
+  onClear: () => clearSelections(),
   onCopy: (prompt) => onCopy(prompt),
 });
 
@@ -191,9 +229,6 @@ picker.onChange((selections) => {
   renderComposer(selections);
   if (selections.length > 0) composerInput.focus({ preventScroll: true });
 });
-picker.onLimitExceeded(() =>
-  showToast(`Limit reached – max ${MAX_SELECTIONS} selections. Remove one to add another.`),
-);
 
 pickerToggle.addEventListener("click", () => togglePicker());
 tweaksToggle.addEventListener("click", () => toggleTweaksPanel());
@@ -249,7 +284,7 @@ function exitFullscreen(): void {
 }
 
 document.addEventListener("keydown", handleHotkey);
-window.addEventListener("message", handleFrameMessage);
+window.addEventListener("message", (e) => bridge.receive(e));
 
 mode = loadMode();
 applyModeToDom();
@@ -280,16 +315,20 @@ const HOT_RELOAD_MAX_WAIT_MS = 500;
 let hotReloadTimer: number | null = null;
 let hotReloadFirstEventAt = 0;
 let hotReloadNeedsRefresh = false;
+let hotReloadTokensChanged = false;
 
 function onDataChanged(path: string): void {
-  // Index, manifest, and token files anywhere can add or remove entries in
-  // the header dropdowns, so they always trigger a full refresh.
-  const isIndex =
-    path.endsWith("/index.json") || path.endsWith("/manifest.json") || path.endsWith("/tokens.css");
+  // Index and manifest files anywhere can add or remove entries in the
+  // header dropdowns, so they always trigger a full refresh and reload.
+  const isIndex = path.endsWith("/index.json") || path.endsWith("/manifest.json");
+  // A tokens.css edit refreshes the data and resends `tokens` without
+  // reloading the frame.
+  const isTokens = path.endsWith("/tokens.css");
   // Anything else only matters if the active surface can link it – its own
   // directory, or a DS in its extends chain (fonts, shared CSS, images).
-  if (!isIndex && !activeDataDirs().some((dir) => path.startsWith(dir))) return;
+  if (!isIndex && !isTokens && !activeDataDirs().some((dir) => path.startsWith(dir))) return;
   if (isIndex) hotReloadNeedsRefresh = true;
+  if (isTokens) hotReloadTokensChanged = true;
   const now = Date.now();
   if (hotReloadTimer === null) {
     hotReloadFirstEventAt = now;
@@ -303,9 +342,14 @@ function onDataChanged(path: string): void {
 function flushHotReload(): void {
   hotReloadTimer = null;
   const needsRefresh = hotReloadNeedsRefresh;
+  const tokensChanged = hotReloadTokensChanged;
   hotReloadNeedsRefresh = false;
-  if (needsRefresh) {
-    refresh({ reload: true }).catch((err) => console.error(err));
+  hotReloadTokensChanged = false;
+  if (needsRefresh || tokensChanged) {
+    // Token previews <link> their tokens.css themselves, so only a reload
+    // picks up the edit there.
+    const reload = needsRefresh || previewSurfaceActive();
+    refresh({ reload }).catch((err) => console.error(err));
   } else {
     reloadActiveVariant();
   }
@@ -469,7 +513,7 @@ function setMode(next: ViewerMode): void {
   saveMode(next);
   applyModeToDom();
   clearPageHistory();
-  picker.clearAll();
+  clearSelections();
   // Refresh picks up the active design/DS for the new mode. The flash-mask
   // (fading class) is applied right before iframe.src changes in
   // selectVariant, not here – keeping the old iframe visible during the
@@ -877,107 +921,160 @@ function selectVariant(variant: VariantEntry, opts: NavOpts = {}): void {
   }
   if (!nextUrl) return;
 
-  const resolvedNext = new URL(nextUrl, window.location.href).href;
-  const sameDoc = iframe.src === resolvedNext && Boolean(iframe.contentDocument);
-  if (sameDoc && !opts.reload) {
-    // Same document, no reload. Re-apply tweaks in case they changed and
-    // re-render the panel; skip the fade entirely.
-    picker.clearAll();
-    picker.attach(iframe);
-    applyTweaksToIframe(iframe, tweaks, tweakValues, tokensMap);
-    syncIframeBackground(iframe);
+  const url = nextUrl;
+  const seq = ++navSeq;
+  const sameDoc = iframe.src === new URL(url, window.location.href).href;
+  if (sameDoc && !opts.reload && bridge.ready) {
+    // Same document, no reload. Resend tokens and tweaks in case they
+    // changed and re-render the panel; skip the fade entirely.
+    clearSelections();
+    if (currentLoad) {
+      currentLoad.tweaks = tweaks;
+      currentLoad.sheets = tokenSheets();
+      currentLoad.sheets.then((sheets) => {
+        if (seq === navSeq) bridge.send("tokens", { sheets });
+      });
+    }
+    sendTweaks(tweaks);
     renderPanel();
     return;
   }
 
-  // Different URL – mask the brief white flash while the iframe swaps
-  // documents. Added synchronously with the src change so the old content
-  // stays visible for every other step (fetches, tweak recompute, etc.)
-  // and the hidden window is as short as possible.
+  if (!sameDoc || !opts.reload) {
+    // Different URL – mask the brief white flash while the frame swaps
+    // documents. The mask lifts when the new document reports `applied`.
+    clearSelections();
+    startLoad(url, tweaks, undefined);
+    return;
+  }
+
   // Reloading the same document (refresh button, hot reload) keeps the
-  // reader's place: capture the scroll offset now and restore it once the
-  // new document has laid out. Setting `src` to its current value is what
-  // forces the re-fetch. If a reload is already in flight the window shows
-  // the transient blank document at (0, 0), so reuse the offset captured
-  // when that reload started.
-  const win = iframe.contentWindow;
-  const keepScroll = sameDoc && opts.reload
-    ? (reloadScroll ?? (win ? { x: win.scrollX, y: win.scrollY } : null))
-    : null;
-  reloadScroll = keepScroll;
-  iframe.classList.add("fading");
-  iframe.src = nextUrl;
-  picker.clearAll();
-
-  iframe.onload = () => {
-    if (keepScroll) iframe.contentWindow?.scrollTo(keepScroll.x, keepScroll.y);
-    normalizeIframeLayout(iframe);
-    injectTokensChain(iframe);
-    injectPreviewChrome(iframe);
-    injectNavScript(iframe);
-    picker.attach(iframe);
-    if (picker.isEnabled()) {
-      iframe.contentDocument?.body.classList.add("od-picker-on");
-    }
-    iframe.contentDocument?.addEventListener("keydown", handleHotkey, true);
-    applyTweaksToIframe(iframe, tweaks, tweakValues, tokensMap);
-    syncIframeBackground(iframe);
-    renderPanel();
-    // iframe.onload fires once the HTML + its own <link> stylesheets are
-    // loaded. The token <link>s we inject inside this handler fetch async,
-    // so revealing here would flash the un-tokenized doc before the tokens
-    // apply. Wait for every stylesheet in the doc to be .sheet-ready (a
-    // loaded stylesheet exposes a non-null CSSStyleSheet), with a safety
-    // cap so a 404'd link never traps the iframe invisible.
-    waitForStylesheets(iframe, STYLESHEET_WAIT_MS).then(() => {
-      requestAnimationFrame(() => {
-        // Stylesheets can change the page height – restore again after layout.
-        if (keepScroll) iframe.contentWindow?.scrollTo(keepScroll.x, keepScroll.y);
-        reloadScroll = null;
-        syncIframeBackground(iframe);
-        iframe.classList.remove("fading");
-        warnIfStateUnused(iframe, tweaks);
-      });
+  // reader's place: ask the frame for a snapshot, wait at most 300 ms, then
+  // reload and hand the state back in `init`. A reload still in flight has
+  // no frame to ask, so reuse the state that reload carries.
+  const selections = picker.getSelections().map((sel) => sel.selector);
+  if (!bridge.ready) {
+    startLoad(url, tweaks, currentLoad?.url === url ? currentLoad.restore : undefined);
+    return;
+  }
+  bridge.requestSnapshot(SNAPSHOT_WAIT_MS).then((snap) => {
+    if (seq !== navSeq) return;
+    const scroll = snap?.scroll ?? (lastScroll?.url === url ? { x: lastScroll.x, y: lastScroll.y } : undefined);
+    startLoad(url, tweaks, {
+      ...(scroll ? { scroll } : {}),
+      ...(snap?.app !== undefined ? { app: snap.app } : {}),
+      selections,
     });
-  };
-}
-
-// Heuristic check after the iframe's stylesheets resolve: if a state tweak
-// is declared on this surface but no rule in the document selects on
-// [data-state=...], the author probably forgot to wire the CSS – a common
-// trip-up that produces a silent "states all stacked even when filtered."
-function warnIfStateUnused(frame: HTMLIFrameElement, tweaks: Tweak[]): void {
-  if (!tweaks.some((t) => t.type === "state")) return;
-  const doc = frame.contentDocument;
-  if (!doc) return;
-  const stylesheets = Array.from(doc.styleSheets) as CSSStyleSheet[];
-  const seen = stylesheets.some((sheet) => {
-    let rules: CSSRuleList;
-    try {
-      rules = sheet.cssRules;
-    } catch {
-      return false; // cross-origin or yet-to-load – skip silently.
-    }
-    return walkRulesForDataState(rules);
   });
-  if (!seen) {
-    console.warn(
-      "[od] this surface declares a `state` tweak but no `[data-state=...]` selector exists in the variant's stylesheets – switching the dropdown will have no visible effect. See SKILL.md step 8 for the CSS pattern.",
-    );
-  }
 }
 
-function walkRulesForDataState(rules: CSSRuleList): boolean {
-  for (let i = 0; i < rules.length; i++) {
-    const rule = rules[i];
-    if (rule instanceof CSSStyleRule && rule.selectorText.includes("data-state")) {
-      return true;
-    }
-    if (rule instanceof CSSGroupingRule && walkRulesForDataState(rule.cssRules)) {
-      return true;
-    }
+function startLoad(url: string, tweaks: Tweak[], restore: Restore | undefined): void {
+  currentLoad = { url, tweaks, restore, sheets: tokenSheets() };
+  if (lastScroll?.url !== url) lastScroll = null;
+  iframe.classList.add("fading");
+  bridge.load(() => {
+    // A blanked frame keeps its srcdoc, which would win over src.
+    iframe.removeAttribute("srcdoc");
+    iframe.src = url;
+  });
+  renderPanel();
+}
+
+function sendTweaks(tweaks: Tweak[]): void {
+  bridge.send("tweaks", { ...tweakPayload(tweaks, tweakValues, tokensMap) });
+}
+
+function clearSelections(): void {
+  picker.clearAll();
+  bridge.send("selection-clear");
+}
+
+function previewSurfaceActive(): boolean {
+  return mode === "design-systems" && surfaceOf(activeDS, activePage?.id)?.kind === "tokens";
+}
+
+// Style sheets the frame prepends to <head>, in order: the viewer's layout
+// defaults, the active extends chain's tokens.css (parent→child), and the
+// preview chrome on token previews. The design's own file may also <link>
+// the tokens for file-open-in-browser compatibility.
+async function tokenSheets(): Promise<TokenSheet[]> {
+  const sheets: TokenSheet[] = [{ name: "od-viewer", css: VIEWER_DEFAULTS_CSS }];
+  if (previewSurfaceActive()) {
+    // Preview surfaces already <link> ../tokens.css.
+    sheets.push({ name: "od-preview-chrome", css: PREVIEW_CHROME_CSS });
+    return sheets;
   }
-  return false;
+  const dsName = mode === "designs" ? activeDesign?.designSystem : activeDS?.name;
+  const chain = resolveExtendsChain(dsName);
+  const texts = await Promise.all(
+    chain.map(async (ds) => {
+      try {
+        const r = await fetch(`${DATA_ROOT}/design-systems/${ds.name}/tokens.css`);
+        return r.ok ? await r.text() : null;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  chain.forEach((ds, i) => {
+    const css = texts[i];
+    if (css !== null) sheets.push({ name: ds.name, css });
+  });
+  return sheets;
+}
+
+function onFrameMessage(msg: FrameMessage): void {
+  const load = currentLoad;
+  switch (msg.type) {
+    case "ready":
+      if (!load) return;
+      load.sheets.then((sheets) => {
+        if (currentLoad !== load) return;
+        bridge.init({
+          tokens: sheets,
+          tweaks: tweakPayload(load.tweaks, tweakValues, tokensMap),
+          picker: picker.isEnabled(),
+          keys: Object.keys(FRAME_KEYS),
+          marks: [],
+          ...(load.restore ? { restore: load.restore } : {}),
+        });
+      });
+      return;
+    case "applied":
+      iframe.style.backgroundColor = msg.background ?? "";
+      iframe.classList.remove("fading");
+      if (load && !load.stateWarned && !msg.stateRules && load.tweaks.some((t) => t.type === "state")) {
+        // The author probably forgot to wire the CSS – a common trip-up that
+        // produces a silent "states all stacked even when filtered."
+        load.stateWarned = true;
+        console.warn(
+          "[od] this surface declares a `state` tweak but no `[data-state=...]` selector exists in the variant's stylesheets – switching the dropdown will have no visible effect. See SKILL.md step 8 for the CSS pattern.",
+        );
+      }
+      return;
+    case "selection":
+      picker.set(msg.items);
+      if (msg.limit) showToast(`Limit reached – max ${MAX_SELECTIONS} selections. Remove one to add another.`);
+      return;
+    case "picker":
+      togglePicker(false);
+      return;
+    case "navigate":
+      navigateTo(msg.page, msg.variant ?? null);
+      return;
+    case "scroll":
+      if (load) lastScroll = { url: load.url, x: msg.x, y: msg.y };
+      return;
+    case "key":
+      FRAME_KEYS[msg.combo]?.();
+      return;
+    case "error":
+      showToast(`This example failed to render: ${msg.message}`);
+      return;
+    default:
+      // resize, revealed, and mark-click serve ACStack's host only.
+      return;
+  }
 }
 
 function reloadActiveVariant(): void {
@@ -993,148 +1090,8 @@ function collectTweaks(index: NormalizedIndex | undefined, page: Page, variant: 
   ];
 }
 
-function normalizeIframeLayout(frame: HTMLIFrameElement): void {
-  const doc = frame.contentDocument;
-  if (!doc) return;
-  let style = doc.getElementById("od-viewer-normalize") as HTMLStyleElement | null;
-  if (!style) {
-    style = doc.createElement("style");
-    style.id = "od-viewer-normalize";
-    doc.head.appendChild(style);
-  }
-  style.textContent = "html, body { min-height: 100vh; }";
-
-  if (!doc.getElementById("od-viewer-scrollbar-defaults")) {
-    const sb = doc.createElement("style");
-    sb.id = "od-viewer-scrollbar-defaults";
-    sb.textContent = SCROLLBAR_DEFAULTS_CSS;
-    doc.head.prepend(sb);
-  }
-}
-
-// In designs mode, inject the resolved extends chain's tokens.css in
-// parent→child order. The design's own file may also <link> these directly
-// for file-open-in-browser compatibility; the additional injection guarantees
-// the chain is always present even when the link paths are wrong.
-function injectTokensChain(frame: HTMLIFrameElement): void {
-  const doc = frame.contentDocument;
-  if (!doc) return;
-  // Remove any previously injected chain so a DS swap doesn't stack.
-  for (const el of Array.from(doc.querySelectorAll("link[data-od-tokens-link]"))) {
-    el.remove();
-  }
-  // Preview surfaces already <link> ../tokens.css – skip to avoid a duplicate fetch.
-  if (mode === "design-systems" && surfaceOf(activeDS, activePage?.id)?.kind === "tokens") {
-    return;
-  }
-  const dsName =
-    mode === "designs"
-      ? activeDesign?.designSystem
-      : activeDS?.name;
-  if (!dsName) return;
-  const chain = resolveExtendsChain(dsName);
-  for (const ds of chain) {
-    const link = doc.createElement("link");
-    link.rel = "stylesheet";
-    link.setAttribute("data-od-tokens-link", ds.name);
-    link.href = `${DATA_ROOT}/design-systems/${ds.name}/tokens.css`;
-    doc.head.prepend(link);
-  }
-}
-
-// Appended (not prepended) so the canonical chrome wins over anything the
-// preview HTML might link locally – e.g. a lingering `_preview.css` from
-// an older DS scaffold.
-function injectPreviewChrome(frame: HTMLIFrameElement): void {
-  const doc = frame.contentDocument;
-  if (!doc) return;
-  if (mode !== "design-systems") return;
-  if (surfaceOf(activeDS, activePage?.id)?.kind !== "tokens") return;
-  let style = doc.getElementById("od-preview-chrome") as HTMLStyleElement | null;
-  if (!style) {
-    style = doc.createElement("style");
-    style.id = "od-preview-chrome";
-    doc.head.appendChild(style);
-  }
-  style.textContent = PREVIEW_CHROME_CSS;
-}
-
-// Resolve once every <link rel="stylesheet"> in the iframe doc has applied
-// (`link.sheet` is non-null) or `maxMs` elapses. Covers the injected token
-// chain whose fetches race the onload-time reveal and cause a brief
-// un-tokenized flash otherwise. The deadline guarantees a reveal even if a
-// link 404s or hangs.
-function waitForStylesheets(frame: HTMLIFrameElement, maxMs: number): Promise<void> {
-  const doc = frame.contentDocument;
-  if (!doc) return Promise.resolve();
-  const links = Array.from(
-    doc.querySelectorAll('link[rel="stylesheet"]'),
-  ) as HTMLLinkElement[];
-  const pending = links.filter((l) => !l.sheet);
-  if (pending.length === 0) return Promise.resolve();
-  return new Promise<void>((resolve) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      resolve();
-    };
-    let remaining = pending.length;
-    const one = () => {
-      remaining--;
-      if (remaining <= 0) finish();
-    };
-    for (const l of pending) {
-      l.addEventListener("load", one, { once: true });
-      l.addEventListener("error", one, { once: true });
-    }
-    window.setTimeout(finish, maxMs);
-  });
-}
-
-function syncIframeBackground(frame: HTMLIFrameElement): void {
-  const doc = frame.contentDocument;
-  const win = doc?.defaultView;
-  if (!doc || !win || !doc.body) return;
-  const pick = (el: Element): string | null => {
-    const bg = win.getComputedStyle(el).backgroundColor;
-    if (!bg || bg === "rgba(0, 0, 0, 0)" || bg === "transparent") return null;
-    return bg;
-  };
-  const bg = pick(doc.documentElement) ?? pick(doc.body);
-  frame.style.backgroundColor = bg ?? "";
-}
-
-function injectNavScript(frame: HTMLIFrameElement): void {
-  const doc = frame.contentDocument;
-  if (!doc) return;
-  if (doc.getElementById("od-viewer-nav-script")) return;
-  const script = doc.createElement("script");
-  script.id = "od-viewer-nav-script";
-  script.textContent = NAV_SCRIPT;
-  doc.head.prepend(script);
-}
-
-const NAV_SCRIPT = `
-(function(){
-  document.addEventListener('click', function(e){
-    if (document.body && document.body.classList && document.body.classList.contains('od-picker-on')) return;
-    var link = e.target.closest('[data-od-page]');
-    if (!link) return;
-    var spec = link.getAttribute('data-od-page') || '';
-    if (!spec) return;
-    e.preventDefault();
-    var parts = spec.split(':');
-    parent.postMessage({
-      type: 'od:navigate',
-      pageId: parts[0],
-      variantId: parts[1] || null
-    }, '*');
-  }, true);
-})();
-`;
-
-const SCROLLBAR_DEFAULTS_CSS = `
+const VIEWER_DEFAULTS_CSS = `
+  html, body { min-height: 100vh; }
   html {
     scrollbar-gutter: stable;
     scrollbar-width: thin;
@@ -1164,19 +1121,13 @@ const SCROLLBAR_DEFAULTS_CSS = `
 
 // Iframe navigation ---------------------------------------------------------
 
-function handleFrameMessage(e: MessageEvent): void {
-  const data = e.data;
-  if (!data || data.type !== "od:navigate") return;
+function navigateTo(targetPageId: string, targetVariantId: string | null): void {
   if (!activePage || !activeVariant) {
-    console.warn("[od] navigate message dropped – viewer not ready", data);
+    console.warn("[od] navigate message dropped – viewer not ready", targetPageId);
     return;
   }
   const ctx = activeContext();
   if (!ctx) return;
-
-  const targetPageId = String(data.pageId || data.page || "");
-  if (!targetPageId) return;
-  const targetVariantId = data.variantId ? String(data.variantId) : null;
   if (targetPageId === activePage.id && (!targetVariantId || targetVariantId === activeVariant.id)) return;
   const next = ctx.pages.find((p) => p.id === targetPageId);
   if (!next) {
@@ -1373,8 +1324,7 @@ function renderPanel(): void {
           filterToTouched(tweakValues, touchedTweakIds),
         );
       }
-      applyTweaksToIframe(iframe, tweaks, tweakValues, tokensMap);
-      syncIframeBackground(iframe);
+      sendTweaks(tweaks);
       if (mode === "design-systems") {
         scheduleDivergenceRecompute();
         scheduleSyncRecompute();
@@ -1906,8 +1856,7 @@ function resetSurfaceToBaseline(): void {
   tweakValues = nextValues;
   touchedTweakIds = new Set(Object.keys(storedValues));
   saveStoredValues(ctxName, activePage.id, activeVariant.id, storedValues);
-  applyTweaksToIframe(iframe, tweaks, tweakValues, tokensMap);
-  syncIframeBackground(iframe);
+  sendTweaks(tweaks);
   renderPanel();
   showToast(snapshot ? "Reset to approved snapshot." : "Reset to schema defaults.");
 }
@@ -1972,8 +1921,7 @@ function resetToSnapshot(): void {
   tweakValues = buildInitialValues(tweaks, snapshotTweaks);
   touchedTweakIds = new Set(Object.keys(snapshotTweaks));
   saveStoredValues(ctxName, activePage.id, activeVariant.id, snapshotTweaks);
-  applyTweaksToIframe(iframe, tweaks, tweakValues, tokensMap);
-  syncIframeBackground(iframe);
+  sendTweaks(tweaks);
   renderPanel();
   recomputeDivergence();
   recomputeSyncDivergences();
@@ -2023,7 +1971,7 @@ function togglePicker(force?: boolean): void {
   const next = force ?? !picker.isEnabled();
   picker.setEnabled(next);
   pickerToggle.setAttribute("aria-checked", String(next));
-  iframe.contentDocument?.body.classList.toggle("od-picker-on", next);
+  bridge.setPicker(next);
 }
 
 function toggleTweaksPanel(force?: boolean): void {
@@ -2059,7 +2007,7 @@ function onCopy(prompt: string): void {
     .writeText(payload)
     .then(() => {
       showToast(`Copied ${selections.length} element${selections.length === 1 ? "" : "s"} – paste into Claude Code.`);
-      picker.clearAll();
+      clearSelections();
       composerInput.value = "";
     })
     .catch(() => showToast("Clipboard blocked – select the text and copy manually."));
@@ -2081,7 +2029,7 @@ function showEmpty(): void {
   activePage = null;
   activeVariant = null;
   clearPageHistory();
-  picker.setEnabled(false);
+  togglePicker(false);
   document.body.classList.add("no-drafts");
 }
 

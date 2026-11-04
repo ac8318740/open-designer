@@ -457,6 +457,9 @@ export function shouldIgnoreFilename(name) {
   return false;
 }
 
+// A loopback name on any port: an SSH forward may use a different local port.
+const LOOPBACK_HOST = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
+
 /**
  * Guard for every POST writer. Host must be a loopback name on any port (an
  * SSH forward may use a different local port), Origin must match it, the body
@@ -469,7 +472,7 @@ export function shouldIgnoreFilename(name) {
  */
 export function rejectWrite(headers, token) {
   const host = headers.host;
-  if (typeof host !== "string" || !/^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(host)) {
+  if (typeof host !== "string" || !LOOPBACK_HOST.test(host)) {
     return [421, "Unknown host"];
   }
   if (headers.origin !== `http://${host}`) return [403, "Forbidden origin"];
@@ -479,4 +482,63 @@ export function rejectWrite(headers, token) {
   }
   if (headers["x-od-token"] !== token) return [403, "Stale viewer page. Reload it."];
   return null;
+}
+
+// --- Design frames ---------------------------------------------------------
+
+// Bridge protocol frame CSP. The sandbox token makes every design document
+// opaque-origin however it is opened, including directly in a tab.
+export const FRAME_CSP =
+  "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' https:; style-src 'unsafe-inline' https:; font-src https: data:; img-src https: data: blob:; connect-src https:; form-action 'none'; base-uri 'none'";
+
+/**
+ * The frame CSP for a document the launcher serves. Existing designs link
+ * their CSS, scripts, and images from the launcher, so its own origin joins
+ * script-src, style-src, img-src, and font-src. connect-src stays https:
+ * only, so frame scripts still cannot reach the launcher's endpoints.
+ * A Host that is not loopback gets the plain FRAME_CSP.
+ *
+ * @param {string | undefined} host  The request's Host header.
+ * @returns {string}
+ */
+export function frameCsp(host) {
+  if (typeof host !== "string" || !LOOPBACK_HOST.test(host)) return FRAME_CSP;
+  const self = `http://${host}`;
+  return FRAME_CSP.replace("script-src 'unsafe-inline' https:", `script-src 'unsafe-inline' https: ${self}`)
+    .replace("style-src 'unsafe-inline' https:", `style-src 'unsafe-inline' https: ${self}`)
+    .replace("font-src https: data:", `font-src https: data: ${self}`)
+    .replace("img-src https: data: blob:", `img-src https: data: blob: ${self}`);
+}
+
+/**
+ * Headers for a design or example document served into the viewer's frame.
+ *
+ * @param {string | undefined} host  The request's Host header.
+ * @returns {Record<string, string>}
+ */
+export function frameDocumentHeaders(host) {
+  return {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
+    "Content-Security-Policy": frameCsp(host),
+  };
+}
+
+/**
+ * Put the bridge script first in a design document's <head>, so it runs
+ * before the design's own scripts. Returns the html unchanged when no bridge
+ * build is available.
+ *
+ * @param {string} html
+ * @param {string | null} bridge  The built od-bridge.js source.
+ * @returns {string}
+ */
+export function injectBridge(html, bridge) {
+  if (!bridge) return html;
+  const tag = `<script data-od-bridge>${bridge.replace(/<\/script/gi, "<\\/script")}</script>`;
+  const head = /<head(\s[^>]*)?>/i.exec(html);
+  if (head) return html.slice(0, head.index + head[0].length) + tag + html.slice(head.index + head[0].length);
+  const doctype = /^\s*<!doctype[^>]*>/i.exec(html);
+  const at = doctype ? doctype[0].length : 0;
+  return html.slice(0, at) + tag + html.slice(at);
 }

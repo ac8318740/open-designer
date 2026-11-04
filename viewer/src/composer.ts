@@ -1,4 +1,4 @@
-import type { SelectionSnapshot } from "./types";
+import type { Selection } from "./bridge/protocol";
 
 export interface ComposerDeps {
   root: HTMLElement;
@@ -6,13 +6,13 @@ export interface ComposerDeps {
   input: HTMLTextAreaElement;
   copyBtn: HTMLButtonElement;
   clearBtn: HTMLButtonElement;
-  getSelections: () => SelectionSnapshot[];
+  getSelections: () => Selection[];
   onRemove: (id: number) => void;
   onClear: () => void;
   onCopy: (prompt: string) => void;
 }
 
-export function mountComposer(deps: ComposerDeps): (selections: SelectionSnapshot[]) => void {
+export function mountComposer(deps: ComposerDeps): (selections: Selection[]) => void {
   const { root, chipsRoot, input, copyBtn, clearBtn, onRemove, onClear, onCopy } = deps;
 
   copyBtn.addEventListener("click", () => onCopy(input.value));
@@ -32,7 +32,7 @@ export function mountComposer(deps: ComposerDeps): (selections: SelectionSnapsho
 
   const countEl = document.getElementById("composer-count");
 
-  return function render(selections: SelectionSnapshot[]) {
+  return function render(selections: Selection[]) {
     if (selections.length === 0) {
       root.hidden = true;
       chipsRoot.innerHTML = "";
@@ -46,7 +46,7 @@ export function mountComposer(deps: ComposerDeps): (selections: SelectionSnapsho
   };
 }
 
-function chip(sel: SelectionSnapshot, onRemove: (id: number) => void): HTMLElement {
+function chip(sel: Selection, onRemove: (id: number) => void): HTMLElement {
   const el = document.createElement("span");
   el.className = "chip";
   el.setAttribute("role", "listitem");

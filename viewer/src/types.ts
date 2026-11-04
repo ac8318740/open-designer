@@ -159,15 +159,6 @@ export interface LegacyChosen {
   shippedAt?: string;
 }
 
-export interface SelectionSnapshot {
-  id: number;
-  selector: string;
-  rect: { x: number; y: number; width: number; height: number };
-  outerHTML: string;
-  styles: Record<string, string>;
-  element: HTMLElement;
-}
-
 export interface DesignEntry {
   design: string;
   index: DesignIndex;

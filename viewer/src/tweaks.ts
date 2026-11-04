@@ -1,10 +1,8 @@
+import type { TweakPayload } from "./bridge/protocol";
 import type { TokensMap, Tweak, TweakTransform } from "./types";
 
 const STORAGE_PREFIX = "od:tweaks:";
 const PANEL_STATE_KEY = "od:panel-open";
-// ID of the injected <style> element that carries tweak CSS variable
-// overrides. Kept here so renames stay in one file.
-const TWEAKS_STYLE_ID = "od-tweaks-vars";
 
 export interface TweakBinding {
   tweaks: Tweak[];
@@ -183,18 +181,15 @@ export function emittedValueFor(
   return `${+next.toFixed(4)}${unit}`;
 }
 
-export function applyTweaksToIframe(
-  iframe: HTMLIFrameElement,
+// Build the `tweaks` bridge message: CSS variables for `:root` plus the
+// attributes the frame sets on `<html>`. The frame only applies them.
+export function tweakPayload(
   tweaks: Tweak[],
   values: Record<string, string>,
   tokensMap: TokensMap | null = null,
-): void {
-  const doc = iframe.contentDocument;
-  if (!doc) return;
-  const cssParts: string[] = [];
-  // If multiple state tweaks exist (rare), the last one wins – the docs only
-  // commit to one at a time.
-  let stateAttr: string | null = null;
+): TweakPayload {
+  const vars: Record<string, string> = {};
+  const attrs: Record<string, string> = {};
   for (const t of tweaks) {
     const raw = values[t.id] ?? defaultFor(t);
     // Discrete-valued tweaks also expose their value as data-{id} on <html>
@@ -202,26 +197,20 @@ export function applyTweaksToIframe(
     // (`:root[data-card-density="cozy"] { ... }`) without a JS shim. Slider
     // / color / text are continuous and stay variable-only.
     if (t.type === "select" || t.type === "toggle" || t.type === "state") {
-      doc.documentElement.setAttribute(`data-${t.id}`, cssValueFor(t, raw));
+      attrs[`data-${t.id.toLowerCase()}`] = cssValueFor(t, raw);
     }
+    // If multiple state tweaks exist (rare), the last one wins – the docs
+    // only commit to one at a time.
     if (t.type === "state") {
-      stateAttr = cssValueFor(t, raw);
+      attrs["data-state"] = cssValueFor(t, raw);
       continue;
     }
     for (const target of resolvedTargets(t)) {
       const emitted = emittedValueFor(t, raw, target, tokensMap);
-      if (emitted === null) continue;
-      cssParts.push(`${target}: ${emitted};`);
+      if (emitted !== null) vars[target] = emitted;
     }
   }
-  if (stateAttr !== null) doc.documentElement.setAttribute("data-state", stateAttr);
-  let style = doc.getElementById(TWEAKS_STYLE_ID) as HTMLStyleElement | null;
-  if (!style) {
-    style = doc.createElement("style");
-    style.id = TWEAKS_STYLE_ID;
-    doc.head.appendChild(style);
-  }
-  style.textContent = `:root { ${cssParts.join(" ")} }`;
+  return { vars, attrs };
 }
 
 export function renderTweaksPanel(args: {

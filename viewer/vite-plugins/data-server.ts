@@ -3,9 +3,10 @@
 // under `vite dev` and `node launcher/serve.mjs`.
 
 import { createReadStream, existsSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { extname, join, resolve } from "node:path";
+import { dirname, extname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
-import type { Plugin } from "vite";
+import { transformWithEsbuild, type Plugin } from "vite";
 // Shared with serve.mjs via a .mjs module + .d.ts sidecar (zero-dep launcher
 // can't consume TS). Single source of truth for finalize + promote + approvals
 // merge logic, safeJoin path checks, and preview label titlecasing. The two
@@ -16,6 +17,8 @@ import {
   applyApprovalsBody,
   applyFinalizeBody,
   applyPromoteBody,
+  frameDocumentHeaders,
+  injectBridge,
   isValidDesignName,
   rejectWrite,
   safeJoin,
@@ -37,6 +40,48 @@ const MIME: Record<string, string> = {
 };
 
 export const DATA_CHANGED_EVENT = "open-designer:data-changed";
+
+const BRIDGE_SOURCE = resolve(dirname(fileURLToPath(import.meta.url)), "../src/bridge/frame.ts");
+
+// Build the in-frame bridge as one standalone classic script. frame.ts
+// imports types only, so a transform (no bundling) is the whole build.
+export async function buildBridgeScript(): Promise<string> {
+  const result = await transformWithEsbuild(readFileSync(BRIDGE_SOURCE, "utf8"), BRIDGE_SOURCE, {
+    loader: "ts",
+    format: "iife",
+    target: "es2020",
+  });
+  return `// OpenDesigner bridge, protocol version 1. Built from src/bridge/frame.ts.\n${result.code}`;
+}
+
+// Emits the bridge as dist/od-bridge.js for the launcher to inline.
+export function bridgeBuild(): Plugin {
+  return {
+    name: "open-designer-bridge",
+    apply: "build",
+    async generateBundle() {
+      this.emitFile({ type: "asset", fileName: "od-bridge.js", source: await buildBridgeScript() });
+    },
+  };
+}
+
+// Design and example documents load sandboxed, with the bridge inlined.
+function serveFrameDocument(
+  req: import("node:http").IncomingMessage,
+  res: import("node:http").ServerResponse,
+  path: string,
+): void {
+  buildBridgeScript().then(
+    (bridge) => {
+      for (const [k, v] of Object.entries(frameDocumentHeaders(req.headers.host))) res.setHeader(k, v);
+      res.end(injectBridge(readFileSync(path, "utf8"), bridge));
+    },
+    (err: Error) => {
+      res.statusCode = 500;
+      res.end(`bridge build failed: ${err.message}`);
+    },
+  );
+}
 
 function readConfigSync(root: string): { defaultDesignSystem?: string } {
   const path = join(root, "config.json");
@@ -413,8 +458,7 @@ export function dataServer(dataRoot: string): Plugin {
         if (stat.isDirectory()) {
           const indexPath = join(abs, "index.html");
           if (existsSync(indexPath)) {
-            res.setHeader("content-type", MIME[".html"]);
-            createReadStream(indexPath).pipe(res);
+            serveFrameDocument(req, res, indexPath);
             return;
           }
           res.statusCode = 404;
@@ -422,6 +466,10 @@ export function dataServer(dataRoot: string): Plugin {
           return;
         }
 
+        if (extname(abs).toLowerCase() === ".html") {
+          serveFrameDocument(req, res, abs);
+          return;
+        }
         res.setHeader(
           "content-type",
           MIME[extname(abs).toLowerCase()] ?? "application/octet-stream",
