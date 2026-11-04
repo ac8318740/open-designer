@@ -73,3 +73,11 @@ export function rejectWrite(
   headers: Record<string, string | string[] | undefined>,
   token: string,
 ): [number, string] | null;
+
+export const FRAME_CSP: string;
+
+export function frameCsp(host: string | undefined): string;
+
+export function frameDocumentHeaders(host: string | undefined): Record<string, string>;
+
+export function injectBridge(html: string, bridge: string | null): string;

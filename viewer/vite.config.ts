@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { defineConfig } from "vite";
-import { dataServer } from "./vite-plugins/data-server";
+import { bridgeBuild, dataServer } from "./vite-plugins/data-server";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -14,7 +14,7 @@ const DATA_ROOT =
 export default defineConfig({
   root: ".",
   base: "./",
-  plugins: [dataServer(DATA_ROOT)],
+  plugins: [dataServer(DATA_ROOT), bridgeBuild()],
   build: {
     outDir: "dist",
     emptyOutDir: true,

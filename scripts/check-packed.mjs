@@ -33,6 +33,7 @@ try {
   // All companions, not just the three entry points, must survive npm's allowlist.
   await checkTree(join(source, 'skills'));
   await access(join(root, 'viewer/dist/index.html'));
+  await access(join(root, 'viewer/dist/od-bridge.js'));
   await access(join(root, 'launcher/finalize.mjs'));
   await access(join(root, '.claude-plugin/plugin.json'));
   const commands = new Map();

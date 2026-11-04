@@ -144,7 +144,7 @@ For each request:
    <link rel="stylesheet" href="../../design-systems/<child>/tokens.css" />
    ```
 
-   The viewer is extends-aware: when it loads a design, it walks the DS chain and injects every `tokens.css` in parent→child order into the iframe. The `<link>`s above are for file-open-in-browser compatibility.
+   The viewer is extends-aware: when it loads a design, it walks the DS chain and sends every `tokens.css` in parent→child order into the design frame as inline styles. The `<link>`s above are for file-open-in-browser compatibility.
 
 6. **Drive the design off DS tokens and a few draft-local CSS variables.** Anything the user might want to adjust that isn't already a DS token – a density preset (cozy/comfy/roomy), whether a decorative ornament is shown, a variant knob that flips a section's layout – goes through a draft-local CSS custom property declared on `:root`. The viewer binds tweak controls directly to those variables, so live adjustment "just works". Example:
 
@@ -254,7 +254,9 @@ For each request:
    - `data-od-page="pageId"` → jumps to the target page's last-active (or first) variant.
    - `data-od-page="pageId:variantId"` → jumps to a specific variant.
 
-   **Do NOT write an inline `<script>` that listens for `data-od-page` clicks and posts to `window.parent`.** The viewer auto-injects the navigation handler at iframe load. Inline duplicates fire a second message with a stale shape, double-bump the back-button history, AND swallow clicks during element-select mode (their handlers race with the picker). Other inline scripts (state observers, chevron toggles, mutation observers) are fine – just leave the `data-od-page` plumbing to the viewer.
+   **Do NOT write an inline `<script>` that listens for `data-od-page` clicks and posts to `window.parent`.** The viewer's bridge script, which the launcher inlines into every design, already handles them, and the viewer drops messages in any other shape. Inline duplicates also swallow clicks during element-select mode (their handlers race with the picker). Other inline scripts (state observers, chevron toggles, mutation observers) are fine – just leave the `data-od-page` plumbing to the viewer.
+
+   Designs run in a sandboxed frame with an opaque origin. `localStorage`, cookies, and `window.parent` are unavailable, and the bridge cancels clicks on links that would leave the document (`#fragment` links still work). Use `data-od-page` for every screen change.
 
    Wire obvious connections by default – the user should not have to ask. See `PAGES.md` for patterns (list → detail, tabs, modal open, auth flow).
 

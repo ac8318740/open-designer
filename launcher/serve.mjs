@@ -5,7 +5,7 @@
 import { createServer } from "node:http";
 import { readFile, stat, readdir, writeFile, rename, unlink } from "node:fs/promises";
 import { existsSync, watch } from "node:fs";
-import { statSync, readdirSync } from "node:fs";
+import { statSync, readdirSync, readFileSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
@@ -14,6 +14,8 @@ import {
   applyApprovalsBody,
   applyFinalizeBody,
   applyPromoteBody,
+  frameDocumentHeaders,
+  injectBridge,
   isValidDesignName,
   rejectWrite,
   stampPromote,
@@ -34,6 +36,12 @@ const VIEWER_ROOT = existsSync(join(VIEWER_DIST, "index.html")) ? VIEWER_DIST : 
 
 // Designs + design systems live in the repo's working directory.
 const DATA_ROOT = join(REPO_CWD, ".open-designer");
+
+// The in-frame bridge script, built with the viewer. Every design document
+// gets it inlined, because the frame CSP blocks http: script URLs.
+const BRIDGE_PATH = join(VIEWER_ROOT, "od-bridge.js");
+const BRIDGE = existsSync(BRIDGE_PATH) ? readFileSync(BRIDGE_PATH, "utf8") : null;
+if (!BRIDGE) console.warn(`od-bridge.js missing from ${VIEWER_ROOT} – run \`npm run build:viewer\`. Designs will not become interactive.`);
 
 // Per-launch secret. Only the viewer page can read it, so only the viewer can write.
 const WRITE_TOKEN = randomBytes(16).toString("hex");
@@ -61,6 +69,19 @@ async function serveFile(res, absPath) {
     const mime = MIME[extname(absPath).toLowerCase()] ?? "application/octet-stream";
     res.writeHead(200, { "Content-Type": mime, "Cache-Control": "no-store" });
     res.end(data);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Design and example documents load sandboxed, with the bridge inlined.
+async function serveDataFile(req, res, absPath) {
+  if (extname(absPath).toLowerCase() !== ".html") return serveFile(res, absPath);
+  try {
+    const html = await readFile(absPath, "utf8");
+    res.writeHead(200, frameDocumentHeaders(req.headers.host));
+    res.end(injectBridge(html, BRIDGE));
     return true;
   } catch {
     return false;
@@ -579,7 +600,7 @@ async function handle(req, res) {
     try {
       const s = await stat(abs);
       if (s.isDirectory()) {
-        const indexed = await serveFile(res, join(abs, "index.html"));
+        const indexed = await serveDataFile(req, res, join(abs, "index.html"));
         if (!indexed) {
           res.writeHead(404);
           res.end("Not found");
@@ -590,7 +611,7 @@ async function handle(req, res) {
       res.writeHead(404);
       return res.end("Not found");
     }
-    if (await serveFile(res, abs)) return;
+    if (await serveDataFile(req, res, abs)) return;
     res.writeHead(404);
     return res.end("Not found");
   }
