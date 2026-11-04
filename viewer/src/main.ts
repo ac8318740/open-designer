@@ -371,7 +371,7 @@ function activeDataDirs(): string[] {
 }
 
 // `import.meta.hot` is truthy only under `vite dev`; in the shipped bundle
-// that branch is dead-code-eliminated and SSE from the zero-dep launcher
+// that branch is dead-code-eliminated and SSE from the launcher
 // drives the reload instead. Event name + payload shape match across both
 // transports.
 if (import.meta.hot) {

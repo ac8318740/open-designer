@@ -179,6 +179,11 @@ export interface DesignSystemManifest {
   shippedAt?: string;
   shippedTo?: string;
   shippedTokens?: string;
+  // "react" designs are .tsx pages built from components/*.tsx; "html" (the
+  // default) designs are hand-written HTML.
+  framework?: "react" | "html";
+  // Once shipped, `@ds/*` imports resolve here, relative to shippedTo.
+  shippedComponents?: string;
 }
 
 export interface DesignSystemIndexPages {

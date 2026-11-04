@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-// Zero-dependency launcher for the open-designer viewer.
+// Launcher for the open-designer viewer. Its only dependency, esbuild, loads
+// when a React design builds.
 // Serves the built viewer at / and .open-designer/ at /data/.
 
 import { createServer } from "node:http";
 import { readFile, stat, readdir, writeFile, rename, unlink } from "node:fs/promises";
 import { existsSync, watch } from "node:fs";
 import { statSync, readdirSync, readFileSync } from "node:fs";
-import { extname, join, resolve } from "node:path";
+import { extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -24,6 +25,7 @@ import {
   titlecaseId,
   validateDesignIndex,
 } from "./finalize.mjs";
+import { REACT_PAGE, buildReactPage, typecheckChosen } from "./react-build.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const PLUGIN_ROOT = resolve(__dirname, "..");
@@ -76,10 +78,13 @@ async function serveFile(res, absPath) {
 }
 
 // Design and example documents load sandboxed, with the bridge inlined.
+// A React page (.tsx) is served as its fresh build.
 async function serveDataFile(req, res, absPath) {
-  if (extname(absPath).toLowerCase() !== ".html") return serveFile(res, absPath);
+  const rel = relative(DATA_ROOT, absPath).split(sep).join("/");
+  const react = REACT_PAGE.test(rel);
+  if (!react && extname(absPath).toLowerCase() !== ".html") return serveFile(res, absPath);
   try {
-    const html = await readFile(absPath, "utf8");
+    const html = react ? await buildReactPage(DATA_ROOT, rel) : await readFile(absPath, "utf8");
     res.writeHead(200, frameDocumentHeaders(req.headers.host));
     res.end(injectBridge(html, BRIDGE));
     return true;
@@ -324,6 +329,11 @@ async function handleFinalize(req, res, design) {
     if (merged.error) {
       res.writeHead(400);
       return res.end(merged.error);
+    }
+    const typeErrors = await typecheckChosen(DATA_ROOT, design, current, merged.chosen);
+    if (typeErrors) {
+      res.writeHead(422);
+      return res.end(typeErrors);
     }
     if (merged.chosen === null) {
       delete current.chosen;

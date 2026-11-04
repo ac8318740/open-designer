@@ -36,6 +36,7 @@ jobs:
             test "${GITHUB_REF_NAME#v}" = "$manifest"
             git merge-base --is-ancestor HEAD origin/main
           fi
+      - run: npm ci --no-audit --no-fund
       - run: npm test
       - run: npm run build:viewer
       - run: npm --prefix viewer test -- --run
