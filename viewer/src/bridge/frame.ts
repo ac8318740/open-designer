@@ -354,6 +354,15 @@ import type { Mark, Restore, Selection, SelectionComponent, TokenSheet } from ".
     sendSelection();
   }
 
+  // Hide badges while reading: innerText on a detached clone would lose layout line breaks.
+  function textWithoutBadges(el: HTMLElement): string {
+    const badges = Array.from(el.querySelectorAll<HTMLElement>(`.${BADGE_CLASS}, .${MARK_CLASS}`));
+    const prev = badges.map((b) => b.style.display);
+    badges.forEach((b) => { b.style.display = "none"; });
+    try { return el.innerText ?? ""; }
+    finally { badges.forEach((b, i) => { b.style.display = prev[i]; }); }
+  }
+
   function addSelection(el: HTMLElement): void {
     const id = picked.length + 1;
     const snap: Selection = {
@@ -361,7 +370,7 @@ import type { Mark, Restore, Selection, SelectionComponent, TokenSheet } from ".
       selector: computeSelector(el).slice(0, SELECTOR_LIMIT),
       rect: rectOf(el),
       html: (el.outerHTML ?? "").slice(0, HTML_LIMIT),
-      text: (el.innerText ?? "").trim().slice(0, TEXT_LIMIT),
+      text: textWithoutBadges(el).trim().slice(0, TEXT_LIMIT),
       styles: collectStyles(el),
     };
     const component = componentOf(el);
