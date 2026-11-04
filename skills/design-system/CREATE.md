@@ -557,6 +557,7 @@ Document the override surface: at the top of the child's `tokens.css`, list the 
   "name": "lightnote-mkt",
   "description": "LightNote marketing surface",
   "extends": "lightnote",
+  "framework": "html",
   "createdAt": "2026-04-22T14:00:00Z",
   "updatedAt": "2026-04-22T14:00:00Z",
   "tokensSource": "DESIGN.md",
@@ -567,7 +568,9 @@ Document the override surface: at the top of the child's `tokens.css`, list the 
 
 2b.3b writes `tokensSource`, `importedAt`, and `importedProperties` when it imports the tokens from `DESIGN.md`. 2b.3a and the greenfield branch write none of them.
 
-`shippedAt`, `shippedTo`, and `shippedTokens` are written only by `/design-integrate`. The launcher's Promote handler writes `promotedAt`. Do not set them here.
+`framework` is `html` or `react`; leave it out for HTML. A React DS also takes `stylesheet` and `shippedComponents`; `COMPONENTS.md` describes both.
+
+`shippedAt`, `shippedTo`, `shippedTokens`, and `shippedComponents` are written only by `/design-integrate`, except that the bootstrap in `COMPONENTS.md` writes `shippedTo` and `shippedComponents` for components that already live in the app. The launcher's Promote handler writes `promotedAt`. Do not set them here.
 
 ## After emit
 

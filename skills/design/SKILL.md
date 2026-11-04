@@ -1,6 +1,6 @@
 ---
 name: design
-description: Local design loop. Write pixel-perfect HTML designs plus variants under .open-designer/designs/, accept pasted element-selection payloads from the viewer to iterate, and consume the project's design system (tokens, voice, rules, gaps) on every iteration. Use when the user asks to design, redesign, or iterate on a page or component visually.
+description: Local design loop. Write pixel-perfect HTML designs, or React (TSX) designs composing design-system components, plus variants under .open-designer/designs/, accept pasted element-selection payloads from the viewer to iterate, and consume the project's design system (tokens, voice, rules, gaps) on every iteration. Use when the user asks to design, redesign, or iterate on a page or component visually.
 ---
 
 ## Host setup
@@ -12,11 +12,11 @@ Read `../HOST.md` before starting. Its host mappings apply to every companion be
 A loop with three actors: the coding assistant, a folder on disk, and a static viewer in the browser.
 
 1. The assistant reads the project's active **design system** under `.open-designer/design-systems/<ds>/` (tokens, briefing docs, playable pages) and uses it as the allow-list + voice + rules contract for every design.
-2. The assistant writes a pixel-perfect replica of the target page plus a few variants as standalone HTML files under `.open-designer/designs/<design-name>/`.
+2. The assistant writes a pixel-perfect replica of the target page plus a few variants under `.open-designer/designs/<design-name>/`: standalone HTML files, or `.tsx` pages composing the design system's components when the design system is React.
 3. The user opens the local viewer, clicks an element, types a request, and pastes the resulting Markdown payload back into the coding session.
 4. The assistant edits the target design. Repeat until the user picks a winner, then port the chosen variant into the real codebase via `/design-integrate`.
 
-No hosted backend. No file watchers. No selection bridges. Just files and the OS clipboard.
+No hosted backend. Just files, a local viewer, and the OS clipboard.
 
 ## When to invoke
 
@@ -35,6 +35,10 @@ Before producing any design, list `.open-designer/design-systems/`. Three cases:
 3. **Multiple DS exist** – check `.open-designer/config.json` for `defaultDesignSystem`. If set, use it (the viewer reads the same file and loads that DS first; falls back to the first DS alphabetically if unset). Otherwise ask which DS applies (`AskUserQuestion`, one option per DS plus a "cancel"). After the answer, offer: "Make `<name>` the default for new designs?" – if yes, write `config.json`.
 
 The chosen DS name lands in the new design's `index.json` as `designSystem: "<name>"`.
+
+### Framework – HTML or React
+
+Read the active DS's `manifest.json`. `"framework": "react"` means every design is `.tsx` pages composing the DS's components: follow `REACT.md` on every write, alongside the rules below. No `framework`, or `"html"`, means HTML designs as this file describes. Never mix the two inside one page.
 
 ### Re-import check – the active DS may be older than `DESIGN.md`
 
@@ -133,7 +137,7 @@ For each request:
 1. Resolve the active DS chain and load the briefing (see above).
 2. Trace the imports of the target page or component to load the relevant code context. Stop at framework boundaries.
 3. Decide the **page set**: list the distinct screens the request covers. A single-page request is one page called e.g. `main`. A multi-page request (log + detail, tabs, wizard steps) gets one page entry per screen.
-4. For each page, write `00-current.html` (pixel-perfect replica of the current state, if any) plus 2 to 4 variants as `01-*.html`, `02-*.html`, etc. Use short slug names (`01-tighter-spacing.html`, `02-amber-cta.html`). When the page has state-revealing components in the briefing, declare a `state` tweak listing those states and use selector-based hiding so the variant filters to one state at a time. The variant boots in the first listed state. See step 8.
+4. For each page, write `00-current.html` (pixel-perfect replica of the current state, if any) plus 2 to 4 variants as `01-*.html`, `02-*.html`, etc. A React DS uses `.tsx` for every file; see `REACT.md`. Use short slug names (`01-tighter-spacing.html`, `02-amber-cta.html`). When the page has state-revealing components in the briefing, declare a `state` tweak listing those states and use selector-based hiding so the variant filters to one state at a time. The variant boots in the first listed state. See step 8.
 5. Each HTML file `<link>`s the DS tokens chain. Relative path from the design file:
 
    ```html
@@ -378,6 +382,7 @@ The shelf is opt-in. For existing-UI work, DS fidelity wins over any reference. 
 
 ## Companion files
 
+- `REACT.md` – React designs: `@ds/<file>` imports, Tailwind, fixtures, the one-file example mode, and single-file builds for ACStack design docs.
 - `WORKFLOW.md` – existing-UI SOP, multi-page projects, common pitfalls.
 - `PAGES.md` – page-vs-variant decision tree, navigation patterns.
 - `REFERENCES.md` – vetted look-and-feel sources with licenses.
