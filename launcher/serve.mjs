@@ -15,6 +15,7 @@ import {
   applyFinalizeBody,
   applyPromoteBody,
   isValidDesignName,
+  rejectWrite,
   stampPromote,
   safeJoin,
   shouldIgnoreFilename,
@@ -36,20 +37,6 @@ const DATA_ROOT = join(REPO_CWD, ".open-designer");
 
 // Per-launch secret. Only the viewer page can read it, so only the viewer can write.
 const WRITE_TOKEN = randomBytes(16).toString("hex");
-
-// Reject cross-site and DNS-rebinding writes: Host must be our loopback port,
-// Origin must match it, the body must be JSON, and the token must match.
-function rejectWrite(req) {
-  const host = req.headers.host;
-  const port = req.socket.localPort;
-  if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) return [421, "Unknown host"];
-  if (req.headers.origin !== `http://${host}`) return [403, "Forbidden origin"];
-  if ((req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase() !== "application/json") {
-    return [415, "Expected application/json"];
-  }
-  if (req.headers["x-od-token"] !== WRITE_TOKEN) return [403, "Stale viewer page. Reload it."];
-  return null;
-}
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -555,7 +542,7 @@ async function handle(req, res) {
   }
 
   if (req.method === "POST") {
-    const rejected = rejectWrite(req);
+    const rejected = rejectWrite(req.headers, WRITE_TOKEN);
     if (rejected) {
       res.writeHead(rejected[0]);
       return res.end(rejected[1]);

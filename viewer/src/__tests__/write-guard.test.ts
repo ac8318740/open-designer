@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { env, execPath } from "node:process";
+import { request } from "node:http";
 
 const SERVE = fileURLToPath(new URL("../../../launcher/serve.mjs", import.meta.url));
 
@@ -40,11 +41,15 @@ afterAll(() => {
   rmSync(cwd, { recursive: true, force: true });
 });
 
+// node:http, not fetch, so the test can set its own Host header.
 const finalize = (headers: Record<string, string>) =>
-  fetch(`${base}/data/designs/demo/finalize`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ clearAll: true }),
+  new Promise<{ status: number }>((ok, fail) => {
+    const req = request(`${base}/data/designs/demo/finalize`, { method: "POST", headers }, (res: any) => {
+      res.resume();
+      ok({ status: res.statusCode });
+    });
+    req.on("error", fail);
+    req.end(JSON.stringify({ clearAll: true }));
   });
 
 describe("launcher write guard", () => {
@@ -66,5 +71,17 @@ describe("launcher write guard", () => {
   it("accepts a write from the viewer", async () => {
     const r = await finalize({ origin: base, "content-type": "application/json", "x-od-token": token });
     expect(r.status).toBe(200);
+  });
+
+  it("accepts a loopback Host on a different port, as an SSH forward sends", async () => {
+    const host = "localhost:5179";
+    const r = await finalize({ host, origin: `http://${host}`, "content-type": "application/json", "x-od-token": token });
+    expect(r.status).toBe(200);
+  });
+
+  it("rejects a non-loopback Host", async () => {
+    const host = "evil.test:5179";
+    const r = await finalize({ host, origin: `http://${host}`, "content-type": "application/json", "x-od-token": token });
+    expect(r.status).toBe(421);
   });
 });
