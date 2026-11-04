@@ -456,7 +456,8 @@ import type { Mark, Restore, Selection, SelectionComponent, TokenSheet } from ".
         break;
       }
       let part = node.tagName.toLowerCase();
-      const cls = typeof node.className === "string" ? node.className.trim().split(/\s+/).filter(Boolean).slice(0, 2) : [];
+      // Bridge-owned classes (od-picker-on, badges) come and go, so a selector naming them stops matching.
+      const cls = typeof node.className === "string" ? node.className.trim().split(/\s+/).filter((c) => c && !c.startsWith("od-")).slice(0, 2) : [];
       if (cls.length) part += "." + cls.map((c) => CSS.escape(c)).join(".");
       const parent: HTMLElement | null = node.parentElement;
       if (parent) {
