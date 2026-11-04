@@ -46,3 +46,27 @@ viewer never reads `iframe.contentDocument`; everything goes through
 - **Handshake.** The frame sends `ready`; the viewer answers `init` with the token sheets, tweak values, picker state, and forwarded key combos; the frame applies them, waits for its stylesheets (300 ms cap), and sends `applied`. The viewer keeps the frame faded until then.
 - **Edits never reload.** Tweak changes send `tweaks`; a `tokens.css` edit sends `tokens`. A reload (refresh button, design edit) first asks for a `snapshot` and hands scroll and selections back in `init.restore`.
 - **Self-navigation stops the bridge.** If the frame loads a document the viewer did not start, the viewer blanks it and shows a notice.
+
+### React designs
+
+A design system with `"framework": "react"` in its `manifest.json` builds its designs from React components. `"html"`, the default, keeps hand-written HTML designs exactly as before.
+
+- **Pages are `.tsx` files.** A variant or design-system page whose `file` ends in `.tsx` default-exports a component. Design-system components live in `components/*.tsx` with typed props and import into pages as `@ds/<file>`.
+- **The server builds on request.** When the frame asks for a `.tsx` page, the launcher (`launcher/react-build.mjs`) builds it with esbuild into `.open-designer/.build/<same path>.html` and `.js` and serves the HTML as a frame document. A save triggers the viewer's hot reload, so each save builds once. A failed build serves a page that shows the error.
+- **One vendor bundle per design system.** Packages from `node_modules` (React, Radix) go into `.build/_vendor/<design system>.js`, which pages reach through `window.__odVendor`. The project supplies the packages; OpenDesigner supplies only esbuild.
+- **CSS comes from the project's own Tailwind.** The build runs the project's Tailwind v4 (`@tailwindcss/node`, resolved beside the stylesheet) on the manifest's `stylesheet`, a path relative to `shippedTo` such as `src/app/globals.css`, over the classes the page bundle contains. Plugins, imports, and `@theme` therefore match production. Without `stylesheet`, the design system's own `styles.css` is used; with neither, pages get no Tailwind CSS. HTML designs are untouched.
+- **Fixtures are JSON imports.** A page imports a fixture from its ACStack element folder and passes it as props.
+- **The picker sees components.** The runtime (`launcher/react-runtime.js`) writes `data-od-component`, `data-od-source`, and `data-od-fixture` on each component's root element and answers the bridge's `window.__od.props.get(el)` with the committed props.
+- **Shipped components replace the copies.** Once `shippedComponents` is set (a path relative to `shippedTo`, e.g. `apps/app/src/ui/primitives`), `@ds/*` resolves to the project's real primitives, and their own `tsconfig.json` paths still resolve.
+- **Type checks run at finalize only.** Finalizing a React variant runs the project's TypeScript with `--noEmit` semantics in a child process (`launcher/typecheck.mjs`) and refuses to finalize on errors.
+
+### Single-file builds
+
+`open-designer build <design> --page <page id> [--out <file>]`, run from the project root, writes one page as one self-contained HTML file for hosts without an OpenDesigner server, such as ACStack's design doc. The default path is `.open-designer/.build/single/<design>/<page>.html`.
+
+- **Everything is inline.** For React pages: production React minified into one vendor script, one script per variant, the compiled CSS in `<style data-od-css>`, the token sheets in `<style data-od-tokens>`, and the bridge as `<script data-od-bridge>`, first in `<head>`. A host adds its own bridge only when that marker is missing.
+- **Every variant is in the file.** `<meta name="od-variant" content="<id>">` names the one that renders, the first by default. A host switches variant by rewriting that tag and reloading the frame.
+- **`<script type="application/json" id="od-page">`** holds the design, design system, page, `designTweaks`, page `tweaks`, and each variant's `id`, `label`, `file`, `tweaks`, and `discardReason`, so a host can draw the variant switcher and tweak controls.
+- **Output is one JSON line on stdout:** `{"path", "size", "design", "page", "variant", "variants"}`. A failed build exits 1 with `open-designer build failed: <reason>` on stderr; bad arguments exit 2.
+- **HTML pages build too.** Local stylesheets, scripts, images, and the fonts and images their CSS references are inlined; remote `https:` assets stay as links. Every local path must resolve inside `.open-designer/`; an absolute path or one that climbs out fails the build. A linked design-system `tokens.css` becomes `<style data-od-tokens>`, and deferred local scripts move to the end of `<body>`. Each variant document is stored base64-encoded, and a small script writes the one `od-variant` names while the page parses.
+- A page's variants must all be `.tsx` or all be `.html`. The bridge comes from `viewer/dist/od-bridge.js`, so a source checkout needs `npm run build:viewer` first.

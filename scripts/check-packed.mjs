@@ -35,6 +35,10 @@ try {
   await access(join(root, 'viewer/dist/index.html'));
   await access(join(root, 'viewer/dist/od-bridge.js'));
   await access(join(root, 'launcher/finalize.mjs'));
+  await access(join(root, 'launcher/react-build.mjs'));
+  await access(join(root, 'launcher/react-runtime.js'));
+  await access(join(root, 'launcher/typecheck.mjs'));
+  await access(join(root, 'launcher/html-inline.mjs'));
   await access(join(root, '.claude-plugin/plugin.json'));
   const commands = new Map();
   const messages = [];

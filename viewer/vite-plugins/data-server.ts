@@ -3,12 +3,12 @@
 // under `vite dev` and `node launcher/serve.mjs`.
 
 import { createReadStream, existsSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, extname, join, resolve } from "node:path";
+import { dirname, extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { transformWithEsbuild, type Plugin } from "vite";
-// Shared with serve.mjs via a .mjs module + .d.ts sidecar (zero-dep launcher
-// can't consume TS). Single source of truth for finalize + promote + approvals
+// Shared with serve.mjs via a .mjs module + .d.ts sidecar (the launcher runs
+// without a TS build). Single source of truth for finalize + promote + approvals
 // merge logic, safeJoin path checks, and preview label titlecasing. The two
 // servers deliberately use different I/O styles – serve.mjs is async because
 // it owns the event loop, this middleware is sync+callbacks to stay out of
@@ -26,6 +26,7 @@ import {
   titlecaseId,
   validateDesignIndex,
 } from "../../launcher/finalize.mjs";
+import { REACT_PAGE, buildReactPage, typecheckChosen } from "../../launcher/react-build.mjs";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -66,15 +67,19 @@ export function bridgeBuild(): Plugin {
 }
 
 // Design and example documents load sandboxed, with the bridge inlined.
+// A React page (.tsx) is served as its fresh build.
 function serveFrameDocument(
   req: import("node:http").IncomingMessage,
   res: import("node:http").ServerResponse,
+  root: string,
   path: string,
 ): void {
-  buildBridgeScript().then(
-    (bridge) => {
+  const rel = relative(root, path).split(sep).join("/");
+  const html = REACT_PAGE.test(rel) ? buildReactPage(root, rel) : Promise.resolve(readFileSync(path, "utf8"));
+  Promise.all([buildBridgeScript(), html]).then(
+    ([bridge, doc]) => {
       for (const [k, v] of Object.entries(frameDocumentHeaders(req.headers.host))) res.setHeader(k, v);
-      res.end(injectBridge(readFileSync(path, "utf8"), bridge));
+      res.end(injectBridge(doc, bridge));
     },
     (err: Error) => {
       res.statusCode = 500;
@@ -140,14 +145,26 @@ function handleFinalize(
         res.end(merged.error);
         return;
       }
-      if (merged.chosen === null) {
-        delete current.chosen;
-      } else {
-        current.chosen = merged.chosen;
-      }
-      atomicWriteSync(indexPath, JSON.stringify(current, null, 2));
-      res.setHeader("content-type", "application/json; charset=utf-8");
-      res.end(JSON.stringify({ ok: true, chosen: current.chosen ?? null }));
+      typecheckChosen(root, design, current, merged.chosen)
+        .then((typeErrors) => {
+          if (typeErrors) {
+            res.statusCode = 422;
+            res.end(typeErrors);
+            return;
+          }
+          if (merged.chosen === null) {
+            delete current.chosen;
+          } else {
+            current.chosen = merged.chosen;
+          }
+          atomicWriteSync(indexPath, JSON.stringify(current, null, 2));
+          res.setHeader("content-type", "application/json; charset=utf-8");
+          res.end(JSON.stringify({ ok: true, chosen: current.chosen ?? null }));
+        })
+        .catch((err: Error) => {
+          res.statusCode = 500;
+          res.end(`finalize failed: ${err.message}`);
+        });
     } catch (err) {
       res.statusCode = 500;
       res.end(`finalize failed: ${(err as Error).message}`);
@@ -458,7 +475,7 @@ export function dataServer(dataRoot: string): Plugin {
         if (stat.isDirectory()) {
           const indexPath = join(abs, "index.html");
           if (existsSync(indexPath)) {
-            serveFrameDocument(req, res, indexPath);
+            serveFrameDocument(req, res, root, indexPath);
             return;
           }
           res.statusCode = 404;
@@ -466,8 +483,8 @@ export function dataServer(dataRoot: string): Plugin {
           return;
         }
 
-        if (extname(abs).toLowerCase() === ".html") {
-          serveFrameDocument(req, res, abs);
+        if (extname(abs).toLowerCase() === ".html" || REACT_PAGE.test(rel)) {
+          serveFrameDocument(req, res, root, abs);
           return;
         }
         res.setHeader(

@@ -12,7 +12,7 @@ No hosted backend or cloud canvas. Just files on disk and your existing coding s
 - Optional use of the [impeccable](https://github.com/pbakaus/impeccable) plugin. With it present, `design-system` imports `tokens.css` from impeccable's `DESIGN.md`. `design-integrate` re-ships tokens after a viewer promote, and runs impeccable's detector on ported pages when spechub is absent. Without impeccable every skill runs as before.
 - A static viewer with two modes (Designs / Design systems). Iterate on designs or on the DS itself by selecting elements and pasting feedback.
 - An element picker overlay that captures a stable selector, the outer HTML, and key computed styles, then puts a Markdown payload on your clipboard.
-- A zero-dependency Node launcher that serves the viewer and the data folder from the same origin.
+- A Node launcher that serves the viewer and the data folder from the same origin. HTML designs need nothing else; React designs build on save with esbuild (see [React designs](viewer/README.md#react-designs)).
 
 ## Install
 
@@ -61,7 +61,8 @@ skills/design-system/        – create / edit / list design systems
 skills/design/               – the design-loop workflow Claude follows
 skills/design-integrate/     – port a finalized design into the codebase
 viewer/                      – static viewer (Vite build)
-launcher/serve.mjs           – zero-dep static server
+launcher/serve.mjs           – the viewer server
+launcher/react-build.mjs     – esbuild builds for React designs
 extensions/open-designer.js  – Pi namespaced command dispatch
 skills/HOST.md               – host tools, approvals, and bundled-resource paths
 package.json                 – npm viewer launcher and native Pi package

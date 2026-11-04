@@ -37,6 +37,7 @@ If the user names a specific design, use that. Otherwise pick the design under `
 - **Never modify `.open-designer/designs/<name>/`** during integration, except to add `chosen.shippedAt` at the very end.
 - **Never modify `.open-designer/design-systems/<ds>/`** during integration, except:
   - `manifest.shippedAt`, `manifest.shippedTo`, and `manifest.shippedTokens` after Stage 1.
+  - `manifest.shippedComponents` after the first React component lifts into the app (`LIFT.md`).
   - `manifest.shippedAt` again after a re-ship, and `manifest.shippedTokens` when an older manifest has none – `shippedTo` never changes after the first ship.
   - Append-only `briefing/gaps.md` entries when a real gap is discovered during integration.
 - **Never delete drafts** without explicit user confirmation.
@@ -187,6 +188,7 @@ Per-page triage and execution. The design's chosen variants + tweaks are the spe
    - **Do NOT bake `state` values into `:root` overrides.** State entries are runtime conditions (loading/empty/errored/streaming/etc.) that the production component must dispatch on, not designer decisions. If the chosen page has any `state` entries, surface a clarification question to the user via `AskUserQuestion`: *"This page has a `state` tweak with options X. Wire the production component to dispatch on the API state machine. Confirm or describe the dispatch."* Use the answer in the executor brief.
    - Write the resolved HTML to `/tmp/od-resolved-<design>-<ts>/resolved/<pageId>.html`.
 4. **Legacy designs** (no `chosen.pages`, only `chosen.variantId`): treat as a single implicit page `main`.
+5. **React designs** (chosen variants are `.tsx`): skip writing `resolved/<pageId>.html`. The variant's `.tsx` and the components it imports are the spec; follow `LIFT.md` for the brief and the order of work.
 
 #### Step 2 – Quick exploration
 
@@ -241,7 +243,7 @@ See `SPECHUB-MAP.md`. Execute page by page, in the order the user confirmed.
 For each page, feed the executor:
 
 - **Resolved DS bundle path** – `/tmp/od-resolved-<design>-<ts>/`.
-- **Resolved page HTML path** – `resolved/<pageId>.html`.
+- **Resolved page HTML path** – `resolved/<pageId>.html`. For a React design, the variant's `.tsx` path and the lift plan from `LIFT.md` instead.
 - **Matched DS playable page path** – `pages/<pageId>.html` (so the executor can see how the DS expresses the layout language).
 - **Clarification answers for this page** – route, copy, data, navigation mapping.
 
@@ -308,5 +310,6 @@ End with a short report:
 ## Companion files
 
 - `EXPLORE.md` – the three exploration agent prompts (updated for DS bundle).
+- `LIFT.md` – lifting React designs: unshipped components first, then the page, and the `shippedComponents` marker.
 - `PATHS.md` – the triage matrix with examples of each path.
 - `SPECHUB-MAP.md` – spechub-vs-self-contained command mapping.

@@ -15,3 +15,4 @@ viewer/.vite/
 # npm release artifacts. .npmrc.release can hold an auth token - never commit it.
 .npmrc.release
 *.tgz
+tests/.tmp-*/

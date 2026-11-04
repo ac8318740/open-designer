@@ -61,7 +61,7 @@ Prefer CI. `npm run release` is an explicit exceptional local **staging** comman
 The `package.json` allowlist ships:
 
 - `extensions/` and `skills/`, including every companion and `HOST.md`
-- `launcher/`, the zero-dependency Node viewer server
+- `launcher/`, the Node viewer server, whose only dependency is esbuild for React designs
 - `viewer/dist/`, the prebuilt static viewer
 - `.claude-plugin/`, the plugin manifest
 - `LICENSE` and `README.md`

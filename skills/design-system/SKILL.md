@@ -13,11 +13,12 @@ Turns the project's visual rules into a file-backed, multi-instance, viewable ar
 
 A design system (DS) lives under `.open-designer/design-systems/<name>/` and owns:
 
-- `manifest.json` – name, description, optional `extends: <parent-ds>`, timestamps.
+- `manifest.json` – name, description, optional `extends: <parent-ds>`, `framework` (`html` or `react`), timestamps.
 - `tokens.css` – real CSS custom properties plus dark-mode and a small semantic base (`h1`, `p`, `code`, `.card`, …). This is the allow-list as runnable CSS, not a markdown list.
 - `briefing/*.md` – living docs the `design` skill re-reads on every iteration. Covers components, layouts, routes, theme, extractable components, voice, rules, gaps.
 - `preview/*.html` – standalone HTML token cards (colors, type, spacing, radius, shadows, motion, components) that link `tokens.css` directly.
 - `pages/*.html` – playable pages – the DS's own mini-app. Tweakable in the viewer in DS mode; tweaks stay local until the user promotes them.
+- `components/*.tsx` and `styles.css` – React design systems only: typed components with named states, and the Tailwind entry when the app has no stylesheet. See `COMPONENTS.md`.
 - `assets/` – logo and other static pieces the DS needs.
 - `screenshots/` – brownfield only; source-UI captures per route, best-effort.
 
@@ -56,13 +57,15 @@ In an existing codebase, one thing decides where the tokens come from: whether t
 
 The briefing sweep runs either way, because impeccable writes nothing that stands in for it. `IMPECCABLE.md` holds the presence rule; `CREATE.md` §2b.0 holds the decision.
 
+Ask whether the DS is HTML or React right after the surface is detected; `COMPONENTS.md` holds the question, the component layout, and the bootstrap from an app's existing primitives.
+
 **Always emit** (minimum viable DS):
 
 - `manifest.json`
 - `tokens.css` (real CSS, lifted from source of truth; never invented)
 - `briefing/*.md` (subset, accurate to source – missing sections are fine if the source doesn't support them)
 - `preview/*.html` (one per token group)
-- `pages/*.html` – at least one playable page, no maximum
+- `pages/*.html` – at least one playable page, no maximum (`pages/*.tsx` for a React DS)
 
 The number of playable pages is flexible – the user can say "add a settings page" mid-flow at any point in the loop.
 
@@ -112,6 +115,7 @@ If you're tempted to write something that isn't backed by source, stop and ask t
 
 ## Companion files
 
+- `COMPONENTS.md` – React design systems: the framework choice, components with typed props and named states, the `stylesheet` and `shippedComponents` settings, and the bootstrap from existing primitives.
 - `CREATE.md` – brownfield + greenfield procedures, 2/10/30-minute depth spectrum, conventions sweep.
 - `EDIT.md` – selection-payload handling, Promote handling, conversational edits, the `DESIGN.md` re-import.
 - `CONVENTIONS.md` – how the conventions sweep reads README, `DESIGN_PRINCIPLES.md`, `globals.css` comments, sample JSX strings to populate `voice.md` / `rules.md` / `gaps.md`.

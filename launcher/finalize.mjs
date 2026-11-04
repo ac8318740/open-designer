@@ -1,5 +1,5 @@
 // Shared launcher write logic for both the dev-time vite middleware
-// (data-server.ts) and the zero-dep production launcher (serve.mjs).
+// (data-server.ts) and the production launcher (serve.mjs).
 //
 // Kept as plain .mjs so serve.mjs can import without a build step;
 // the vite middleware consumes it via allowJs.
