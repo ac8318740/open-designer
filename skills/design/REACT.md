@@ -67,10 +67,10 @@ The build compiles CSS with the project's own Tailwind, run on the design system
 
 ## Fixtures
 
-Sample data is JSON imported as props. When the design illustrates an ACStack design-doc element, the fixture lives in that element's folder, `<project folder>/maps/<map>/elements/<element-id>/`, beside a JSON Schema that types it. Otherwise keep it next to the design.
+Sample data is JSON imported as props. When the design illustrates an ACStack design-doc element, the fixture lives in that element's folder, `<project folder>/maps/<map>/elements/<element-id>/`, beside a JSON Schema that types it. Import it through `@acstack/maps/<map>/elements/<element-id>/<fixture>.json`. The build resolves `@acstack/` to the project's ACStack data folder with `acstack project-data path`, so the import works whether that data is tracked in the repo or kept globally. Otherwise keep the fixture next to the design.
 
 ```tsx
-import notebook from "../../../../.acstack/maps/notebooks/elements/notebook-card/notebook.json";
+import notebook from "@acstack/maps/notebooks/elements/notebook-card/notebook.json";
 
 export default function Page() {
   return <NotebookCard notebook={notebook} />;
