@@ -212,6 +212,8 @@ export function dataServer(dataRoot: string): Plugin {
 
   return {
     name: "open-designer-data",
+    // Dev only: a build would bake this token into dist, ahead of the launcher's.
+    apply: "serve",
     transformIndexHtml(html) {
       return html.replace("</head>", `<meta name="od-write-token" content="${token}">\n</head>`);
     },
