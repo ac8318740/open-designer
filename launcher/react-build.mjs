@@ -11,15 +11,19 @@
 //
 // `@ds/<name>` imports resolve to the design system's components/ folder, or
 // to the project's real primitives once manifest.shippedComponents is set.
+// `@acstack/<path>` imports resolve to the project's ACStack data folder, which
+// `acstack project-data path` prints whether the data is tracked or global.
 // Each file's nearest tsconfig.json still resolves its own path aliases.
 //
 // CSS comes from the project's own Tailwind, run on the design system's
 // stylesheet (see designSystemOf) over the classes the page bundle contains.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createRequire } from "node:module";
+import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { injectBridge } from "./finalize.mjs";
 import { inlineHtmlDesign, inlineScript, inlineStyle } from "./html-inline.mjs";
@@ -77,6 +81,27 @@ function designSystemOf(dataRoot, rel) {
   return { name, componentsDir: join(dir, "components"), sourceRoot: dir, shipped: false, stylesheet, ownDir: null, dsDir: dir };
 }
 
+// The ACStack data folder for `@acstack/` imports. Throws a readable error
+// when ACStack is not installed or the project has no data.
+async function acstackData(projectRoot) {
+  const installed = join(homedir(), ".claude", "acstack", "bin", "acstack");
+  let stdout;
+  try {
+    ({ stdout } = await promisify(execFile)(existsSync(installed) ? installed : "acstack", ["project-data", "path"], { cwd: projectRoot }));
+  } catch (err) {
+    throw new Error(`@acstack/ imports need ACStack, but \`acstack project-data path\` failed: ${err.code === "ENOENT" ? "acstack is not installed" : (err.stderr || err.message).trim()}`);
+  }
+  const dir = stdout.trim();
+  if (!existsSync(dir)) throw new Error(`@acstack/ imports need ACStack project data, but ${dir} does not exist`);
+  return dir;
+}
+
+// Runs acstackData at most once per build, and only if a page imports @acstack/.
+const acstackOnce = (projectRoot) => {
+  let dir;
+  return () => (dir ??= acstackData(projectRoot));
+};
+
 const inside = (path, dir) => !!dir && path.startsWith(dir + sep);
 const inNodeModules = (path) => path.includes(`${sep}node_modules${sep}`);
 
@@ -106,7 +131,7 @@ const defineFor = (prod) => ({ "process.env.NODE_ENV": prod ? '"production"' : '
  * single-file build can carry every variant and render the one its
  * <meta name="od-variant"> names.
  */
-async function bundlePage(esbuild, dataRoot, rel, ds, { prod, vendor, only }) {
+async function bundlePage(esbuild, dataRoot, rel, ds, { prod, vendor, only, acstack }) {
   const projectRoot = dirname(dataRoot);
   const page = join(dataRoot, rel);
   const needed = {};
@@ -118,6 +143,15 @@ async function bundlePage(esbuild, dataRoot, rel, ds, { prod, vendor, only }) {
         if (!ds.componentsDir) return { errors: [{ text: `${args.path}: this page has no design system` }] };
         const r = await b.resolve(`./${args.path.slice(4)}`, { kind: args.kind, resolveDir: ds.componentsDir });
         return r.errors.length && ds.ownDir ? b.resolve(`./${args.path.slice(4)}`, { kind: args.kind, resolveDir: ds.ownDir }) : r;
+      });
+      b.onResolve({ filter: /^@acstack\// }, async (args) => {
+        let dir;
+        try {
+          dir = await acstack();
+        } catch (err) {
+          return { errors: [{ text: err.message }] };
+        }
+        return b.resolve(`./${args.path.slice(9)}`, { kind: args.kind, resolveDir: dir });
       });
       // Anything that resolves into node_modules comes from the vendor bundle.
       b.onResolve({ filter: /^[^./]/ }, async (args) => {
@@ -239,7 +273,7 @@ async function build(dataRoot, rel) {
   const vendorBase = join(buildRoot, "_vendor", ds.name ?? "_none");
   const vendor = readJson(`${vendorBase}.json`) ?? {};
 
-  const { js, css, needed } = await bundlePage(esbuild, dataRoot, rel, ds, { prod: false, vendor });
+  const { js, css, needed } = await bundlePage(esbuild, dataRoot, rel, ds, { prod: false, vendor, acstack: acstackOnce(projectRoot) });
   const styles = [await tailwindCss(ds, projectRoot, js, false), css].filter(Boolean).join("\n");
   mkdirSync(dirname(out), { recursive: true });
   writeFileSync(`${out}.js`, js);
@@ -360,8 +394,9 @@ ${docs.join("\n")}
 
   const packages = {};
   const bundles = [];
+  const acstack = acstackOnce(projectRoot);
   for (const v of variants) {
-    const b = await bundlePage(esbuild, dataRoot, `designs/${design}/${v.file}`, ds, { prod: true, vendor: packages, only: v.id });
+    const b = await bundlePage(esbuild, dataRoot, `designs/${design}/${v.file}`, ds, { prod: true, vendor: packages, only: v.id, acstack });
     Object.assign(packages, b.needed);
     bundles.push(b);
   }
@@ -416,7 +451,15 @@ export async function typecheckChosen(dataRoot, design, index, chosen) {
     .map((file) => join(dataRoot, "designs", design, file));
   if (files.length === 0) return null;
   const ds = designSystemOf(dataRoot, `designs/${design}/x.tsx`);
-  const args = { projectRoot: dirname(dataRoot), componentsDir: ds.componentsDir, ownDir: ds.ownDir, shipped: ds.shipped, files };
+  let acstack = null;
+  if (files.some((file) => existsSync(file) && readFileSync(file, "utf8").includes("@acstack/"))) {
+    try {
+      acstack = await acstackData(dirname(dataRoot));
+    } catch (err) {
+      return `Type check failed:\n${err.message}`;
+    }
+  }
+  const args = { projectRoot: dirname(dataRoot), acstack, componentsDir: ds.componentsDir, ownDir: ds.ownDir, shipped: ds.shipped, files };
   const child = spawn(process.execPath, [TYPECHECK, JSON.stringify(args)], { stdio: ["ignore", "pipe", "inherit"] });
   let output = "";
   child.stdout.on("data", (d) => (output += d));

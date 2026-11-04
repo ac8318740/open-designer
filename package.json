@@ -1,6 +1,6 @@
 {
   "name": "open-designer-viewer",
-  "version": "0.7.8",
+  "version": "0.8.0",
   "description": "Local design loop for Claude Code and Pi: HTML drafts, design systems, and a local viewer.",
   "license": "MIT",
   "author": "ac8318740",
