@@ -49,6 +49,11 @@ import { buildPromotePrompt } from "./sync-prompts";
 import PREVIEW_CHROME_CSS from "./preview-chrome.css?raw";
 
 const DATA_ROOT = "/data";
+// The launcher injects a per-launch token; every write must send it back.
+const WRITE_HEADERS = {
+  "content-type": "application/json",
+  "x-od-token": document.querySelector<HTMLMetaElement>('meta[name="od-write-token"]')?.content ?? "",
+};
 const ACTIVE_DESIGN_KEY = "od:active-design";
 const ACTIVE_DS_KEY = "od:active-ds";
 const ACTIVE_MODE_KEY = "od:mode";
@@ -1577,7 +1582,7 @@ async function postFinalize(body: unknown): Promise<{ chosen: Chosen | null }> {
   if (!activeDesign) throw new Error("no active design");
   const r = await fetch(`${DATA_ROOT}/designs/${activeDesign.name}/finalize`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: WRITE_HEADERS,
     body: JSON.stringify(body),
   });
   if (!r.ok) throw new Error(await r.text());
@@ -1937,7 +1942,7 @@ async function approveCurrentSurface(): Promise<void> {
   try {
     const r = await fetch(`${DATA_ROOT}/design-systems/${activeDS.name}/approvals`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: WRITE_HEADERS,
       body: JSON.stringify(body),
     });
     if (!r.ok) throw new Error(await r.text());
@@ -2001,7 +2006,7 @@ async function promoteTweak(tweak: Tweak): Promise<void> {
   try {
     const r = await fetch(`${DATA_ROOT}/design-systems/${activeDS.name}/promote`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: WRITE_HEADERS,
       body: JSON.stringify({ target: tweak.target, value }),
     });
     if (!r.ok) throw new Error(await r.text());

@@ -68,3 +68,8 @@ export function validateDesignIndex(
   index: unknown,
   designName: string,
 ): string[];
+
+export function rejectWrite(
+  headers: Record<string, string | string[] | undefined>,
+  token: string,
+): [number, string] | null;

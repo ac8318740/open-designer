@@ -4,6 +4,7 @@
 
 import { createReadStream, existsSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
+import { randomBytes } from "node:crypto";
 import type { Plugin } from "vite";
 // Shared with serve.mjs via a .mjs module + .d.ts sidecar (zero-dep launcher
 // can't consume TS). Single source of truth for finalize + promote + approvals
@@ -16,6 +17,7 @@ import {
   applyFinalizeBody,
   applyPromoteBody,
   isValidDesignName,
+  rejectWrite,
   safeJoin,
   shouldIgnoreFilename,
   titlecaseId,
@@ -205,9 +207,16 @@ function handlePromote(
 
 export function dataServer(dataRoot: string): Plugin {
   const root = resolve(dataRoot);
+  // Same per-launch write token as serve.mjs.
+  const token = randomBytes(16).toString("hex");
 
   return {
     name: "open-designer-data",
+    // Dev only: a build would bake this token into dist, ahead of the launcher's.
+    apply: "serve",
+    transformIndexHtml(html) {
+      return html.replace("</head>", `<meta name="od-write-token" content="${token}">\n</head>`);
+    },
     configureServer(server) {
       server.watcher.add(root);
       const notify = (absPath: string) => {
@@ -228,6 +237,15 @@ export function dataServer(dataRoot: string): Plugin {
 
       server.middlewares.use("/data", (req, res, next) => {
         const url = (req.url || "/").split("?")[0];
+
+        if (req.method === "POST") {
+          const rejected = rejectWrite(req.headers, token);
+          if (rejected) {
+            res.statusCode = rejected[0];
+            res.end(rejected[1]);
+            return;
+          }
+        }
 
         // POST /designs/<name>/finalize
         const designFinalize = url.match(/^\/designs\/([^/]+)\/finalize$/);

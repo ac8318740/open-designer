@@ -456,3 +456,27 @@ export function shouldIgnoreFilename(name) {
   if (name.endsWith("~")) return true;
   return false;
 }
+
+/**
+ * Guard for every POST writer. Host must be a loopback name on any port (an
+ * SSH forward may use a different local port), Origin must match it, the body
+ * must be JSON, and the per-launch token must match. Returns [status, message]
+ * to reject, or null to allow.
+ *
+ * @param {Record<string, string | string[] | undefined>} headers
+ * @param {string} token
+ * @returns {[number, string] | null}
+ */
+export function rejectWrite(headers, token) {
+  const host = headers.host;
+  if (typeof host !== "string" || !/^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(host)) {
+    return [421, "Unknown host"];
+  }
+  if (headers.origin !== `http://${host}`) return [403, "Forbidden origin"];
+  const type = typeof headers["content-type"] === "string" ? headers["content-type"] : "";
+  if (type.split(";")[0].trim().toLowerCase() !== "application/json") {
+    return [415, "Expected application/json"];
+  }
+  if (headers["x-od-token"] !== token) return [403, "Stale viewer page. Reload it."];
+  return null;
+}
