@@ -46,3 +46,16 @@ viewer never reads `iframe.contentDocument`; everything goes through
 - **Handshake.** The frame sends `ready`; the viewer answers `init` with the token sheets, tweak values, picker state, and forwarded key combos; the frame applies them, waits for its stylesheets (300 ms cap), and sends `applied`. The viewer keeps the frame faded until then.
 - **Edits never reload.** Tweak changes send `tweaks`; a `tokens.css` edit sends `tokens`. A reload (refresh button, design edit) first asks for a `snapshot` and hands scroll and selections back in `init.restore`.
 - **Self-navigation stops the bridge.** If the frame loads a document the viewer did not start, the viewer blanks it and shows a notice.
+
+### React designs
+
+A design system with `"framework": "react"` in its `manifest.json` builds its designs from React components. `"html"`, the default, keeps hand-written HTML designs exactly as before.
+
+- **Pages are `.tsx` files.** A variant or design-system page whose `file` ends in `.tsx` default-exports a component. Design-system components live in `components/*.tsx` with typed props and import into pages as `@ds/<file>`.
+- **The server builds on request.** When the frame asks for a `.tsx` page, the launcher (`launcher/react-build.mjs`) builds it with esbuild into `.open-designer/.build/<same path>.html` and `.js` and serves the HTML as a frame document. A save triggers the viewer's hot reload, so each save builds once. A failed build serves a page that shows the error.
+- **One vendor bundle per design system.** Packages from `node_modules` (React, Radix) go into `.build/_vendor/<design system>.js`, which pages reach through `window.__odVendor`. The project supplies the packages; OpenDesigner supplies only esbuild.
+- **Tailwind loads in the frame** through `@tailwindcss/browser`.
+- **Fixtures are JSON imports.** A page imports a fixture from its ACStack element folder and passes it as props.
+- **The picker sees components.** The runtime (`launcher/react-runtime.js`) writes `data-od-component`, `data-od-source`, and `data-od-fixture` on each component's root element and answers the bridge's `window.__od.props.get(el)` with the committed props.
+- **Shipped components replace the copies.** Once `shippedComponents` is set (a path relative to `shippedTo`, e.g. `apps/app/src/ui/primitives`), `@ds/*` resolves to the project's real primitives, and their own `tsconfig.json` paths still resolve.
+- **Type checks run at finalize only.** Finalizing a React variant runs the project's TypeScript with `--noEmit` semantics in a child process (`launcher/typecheck.mjs`) and refuses to finalize on errors.
