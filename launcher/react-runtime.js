@@ -57,8 +57,9 @@ function propsOf(el) {
   const fiber = hosts.get(el);
   if (!fiber) return undefined;
   try {
-    // Children and other React elements hold fibers, which are circular.
-    return JSON.parse(JSON.stringify(fiber.memoizedProps, (_k, v) => (v && v.$$typeof ? undefined : v)));
+    // React elements hold fibers, which are circular; only text children say anything.
+    const drop = (k, v) => (v && v.$$typeof) || (k === "children" && typeof v !== "string");
+    return JSON.parse(JSON.stringify(fiber.memoizedProps, (k, v) => (drop(k, v) ? undefined : v)));
   } catch {
     return undefined;
   }

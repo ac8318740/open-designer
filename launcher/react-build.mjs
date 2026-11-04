@@ -95,7 +95,10 @@ async function build(dataRoot, rel) {
       // Anything that resolves into node_modules comes from the vendor bundle.
       b.onResolve({ filter: /^[^./]/ }, async (args) => {
         if (args.pluginData === SKIP) return undefined;
-        const r = await b.resolve(args.path, { kind: args.kind, importer: args.importer, resolveDir: args.resolveDir, pluginData: SKIP });
+        const opts = { kind: args.kind, importer: args.importer, pluginData: SKIP };
+        let r = await b.resolve(args.path, { ...opts, resolveDir: args.resolveDir });
+        // A monorepo app keeps its packages beside its components, not at the root.
+        if (r.errors.length && ds.componentsDir) r = await b.resolve(args.path, { ...opts, resolveDir: ds.componentsDir });
         if (r.errors.length || !inNodeModules(r.path) || r.path.endsWith(".css")) return r;
         needed[args.path] = vendor[args.path] ?? r.path;
         return { path: args.path, namespace: "od-vendor" };

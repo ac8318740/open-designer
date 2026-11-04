@@ -8,14 +8,24 @@
 // Exits 1 with diagnostics on stdout when the check fails.
 
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const { projectRoot, componentsDir, shipped, files } = JSON.parse(process.argv[2]);
 
+// A monorepo app keeps its TypeScript beside its components, not at the root.
 let ts;
-try {
-  ts = createRequire(join(projectRoot, "package.json"))("typescript");
-} catch {
+let nodeModules;
+for (const dir of [projectRoot, componentsDir].filter(Boolean)) {
+  try {
+    const require = createRequire(join(dir, "package.json"));
+    ts = require("typescript");
+    nodeModules = dirname(dirname(require.resolve("typescript/package.json")));
+    break;
+  } catch {
+    /* try the next place */
+  }
+}
+if (!ts) {
   console.log("Skipped the type check: typescript is not installed in this project.");
   process.exit(0);
 }
@@ -38,7 +48,12 @@ const options = {
   resolveJsonModule: true,
   allowImportingTsExtensions: true,
   pathsBasePath: base.pathsBasePath ?? projectRoot,
-  paths: { ...base.paths, ...(componentsDir ? { "@ds/*": [join(componentsDir, "*")] } : {}) },
+  paths: {
+    // Design files sit outside the app, so they find React's types where TypeScript was found.
+    "*": [join(nodeModules, "@types", "*"), join(nodeModules, "*")],
+    ...base.paths,
+    ...(componentsDir ? { "@ds/*": [join(componentsDir, "*")] } : {}),
+  },
 };
 
 const diagnostics = ts.getPreEmitDiagnostics(ts.createProgram(files, options));
