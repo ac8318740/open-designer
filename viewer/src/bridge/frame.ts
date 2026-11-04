@@ -33,6 +33,8 @@ import type { Mark, Restore, Selection, SelectionComponent, TokenSheet } from ".
   const SELECTED_ATTR = "data-od-selected";
   const BADGE_CLASS = "od-picker-badge";
   const MARK_CLASS = "od-mark-badge";
+  const HOST_CLASS = "od-badge-host";
+  const GUTTER_CLASS = "od-badge-gutter";
   const MARK_ATTR = "data-od-mark";
   const FLASH_ATTR = "data-od-flash";
   const STYLE_KEYS = [
@@ -57,6 +59,8 @@ import type { Mark, Restore, Selection, SelectionComponent, TokenSheet } from ".
   let pickerOn = false;
   let keys = new Set<string>();
   let picked: Picked[] = [];
+  // A picked element's badge, which may sit in a child cell rather than the element itself.
+  const pickBadges = new WeakMap<HTMLElement, HTMLElement>();
   let marks: Mark[] = [];
   let tweakAttrs: string[] = [];
   let queuedError: Data | null = null;
@@ -288,17 +292,19 @@ import type { Mark, Restore, Selection, SelectionComponent, TokenSheet } from ".
     const style = document.createElement("style");
     style.setAttribute("data-od-bridge", "");
     style.textContent = `
-      #${HOVER_ID} { position: fixed; pointer-events: none; border: 2px dashed #f59e0b;
-        background: rgba(245, 158, 11, 0.06); z-index: 2147483646; display: none; }
+      #${HOVER_ID} { position: fixed; box-sizing: border-box; pointer-events: none; outline: 2px dashed #f59e0b;
+        outline-offset: 2px; background: rgba(245, 158, 11, 0.06); z-index: 2147483646; display: none; }
       body:not(.od-picker-on) #${HOVER_ID} { display: none !important; }
       [${SELECTED_ATTR}] { outline: 2px solid #f59e0b !important; outline-offset: 2px; position: relative; }
       [${MARK_ATTR}] { position: relative; }
       [${FLASH_ATTR}] { outline: 3px solid #3b82f6 !important; outline-offset: 2px; }
-      .${BADGE_CLASS}, .${MARK_CLASS} { position: absolute; top: -10px; left: -10px; min-width: 22px; height: 22px;
+      .${HOST_CLASS} { position: relative; }
+      .${BADGE_CLASS}, .${MARK_CLASS} { position: absolute; top: -3px; left: -3px; transform: translate(var(--od-bx, -100%), var(--od-by, -100%)); min-width: 22px; height: 22px;
         padding: 0 4px; box-sizing: border-box; border-radius: 11px; background: #f59e0b; color: #1f1300;
         font: 600 12px/22px ui-sans-serif, system-ui, sans-serif; text-align: center;
         z-index: 2147483647; pointer-events: none; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25); }
-      .${MARK_CLASS} { background: #3b82f6; color: #fff; left: auto; right: -10px; pointer-events: auto; cursor: pointer; }
+      .${MARK_CLASS} { --od-bx: 100%; background: #3b82f6; color: #fff; left: auto; right: -3px; pointer-events: auto; cursor: pointer; }
+      .${BADGE_CLASS}.${GUTTER_CLASS}, .${MARK_CLASS}.${GUTTER_CLASS} { --od-bx: -100%; --od-by: -50%; top: 50%; left: -6px; right: auto; }
     `;
     (document.head ?? document.documentElement).appendChild(style);
     hover = document.createElement("div");
@@ -354,6 +360,15 @@ import type { Mark, Restore, Selection, SelectionComponent, TokenSheet } from ".
     sendSelection();
   }
 
+  // Hide badges while reading: innerText on a detached clone would lose layout line breaks.
+  function textWithoutBadges(el: HTMLElement): string {
+    const badges = Array.from(el.querySelectorAll<HTMLElement>(`.${BADGE_CLASS}, .${MARK_CLASS}`));
+    const prev = badges.map((b) => b.style.display);
+    badges.forEach((b) => { b.style.display = "none"; });
+    try { return el.innerText ?? ""; }
+    finally { badges.forEach((b, i) => { b.style.display = prev[i]; }); }
+  }
+
   function addSelection(el: HTMLElement): void {
     const id = picked.length + 1;
     const snap: Selection = {
@@ -361,7 +376,7 @@ import type { Mark, Restore, Selection, SelectionComponent, TokenSheet } from ".
       selector: computeSelector(el).slice(0, SELECTOR_LIMIT),
       rect: rectOf(el),
       html: (el.outerHTML ?? "").slice(0, HTML_LIMIT),
-      text: (el.innerText ?? "").trim().slice(0, TEXT_LIMIT),
+      text: textWithoutBadges(el).trim().slice(0, TEXT_LIMIT),
       styles: collectStyles(el),
     };
     const component = componentOf(el);
@@ -371,7 +386,22 @@ import type { Mark, Restore, Selection, SelectionComponent, TokenSheet } from ".
     const badge = document.createElement("span");
     badge.className = BADGE_CLASS;
     badge.textContent = String(id);
-    el.appendChild(badge);
+    attachBadge(el, badge);
+    pickBadges.set(el, badge);
+  }
+
+  // Badges sit outside a corner of the element and flip inward at the page edge, so they never widen the page.
+  // A table row cannot position a child, so its badge goes in the leading gutter of its first cell.
+  function attachBadge(el: HTMLElement, badge: HTMLElement): void {
+    const cell = el instanceof HTMLTableRowElement ? (el.cells[0] as HTMLElement | undefined) : undefined;
+    if (cell) {
+      cell.classList.add(HOST_CLASS);
+      badge.classList.add(GUTTER_CLASS);
+    }
+    (cell ?? el).appendChild(badge);
+    const r = badge.getBoundingClientRect();
+    if (r.left + window.scrollX < 0 || r.right + window.scrollX > document.documentElement.clientWidth) badge.style.setProperty("--od-bx", "0%");
+    if (r.top + window.scrollY < 0) badge.style.setProperty("--od-by", "0%");
   }
 
   function removeAt(index: number): void {
@@ -380,14 +410,15 @@ import type { Mark, Restore, Selection, SelectionComponent, TokenSheet } from ".
     picked.forEach((p, i) => {
       p.id = p.snap.id = i + 1;
       p.el.setAttribute(SELECTED_ATTR, String(p.id));
-      const badge = p.el.querySelector(`:scope > .${BADGE_CLASS}`);
+      const badge = pickBadges.get(p.el);
       if (badge) badge.textContent = String(p.id);
     });
   }
 
   function unmark(el: HTMLElement): void {
     el.removeAttribute(SELECTED_ATTR);
-    el.querySelector(`:scope > .${BADGE_CLASS}`)?.remove();
+    pickBadges.get(el)?.remove();
+    pickBadges.delete(el);
   }
 
   function clearSelections(): void {
@@ -456,7 +487,8 @@ import type { Mark, Restore, Selection, SelectionComponent, TokenSheet } from ".
         break;
       }
       let part = node.tagName.toLowerCase();
-      const cls = typeof node.className === "string" ? node.className.trim().split(/\s+/).filter(Boolean).slice(0, 2) : [];
+      // Bridge-owned classes (od-picker-on, badges) come and go, so a selector naming them stops matching.
+      const cls = typeof node.className === "string" ? node.className.trim().split(/\s+/).filter((c) => c && !c.startsWith("od-")).slice(0, 2) : [];
       if (cls.length) part += "." + cls.map((c) => CSS.escape(c)).join(".");
       const parent: HTMLElement | null = node.parentElement;
       if (parent) {
@@ -500,7 +532,7 @@ import type { Mark, Restore, Selection, SelectionComponent, TokenSheet } from ".
         e.stopPropagation();
         post("mark-click", { key: m.key });
       });
-      el.appendChild(badge);
+      attachBadge(el, badge);
     }
   }
 
