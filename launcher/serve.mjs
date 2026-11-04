@@ -9,6 +9,7 @@ import { statSync, readdirSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import {
   applyApprovalsBody,
   applyFinalizeBody,
@@ -32,6 +33,23 @@ const VIEWER_ROOT = existsSync(join(VIEWER_DIST, "index.html")) ? VIEWER_DIST : 
 
 // Designs + design systems live in the repo's working directory.
 const DATA_ROOT = join(REPO_CWD, ".open-designer");
+
+// Per-launch secret. Only the viewer page can read it, so only the viewer can write.
+const WRITE_TOKEN = randomBytes(16).toString("hex");
+
+// Reject cross-site and DNS-rebinding writes: Host must be our loopback port,
+// Origin must match it, the body must be JSON, and the token must match.
+function rejectWrite(req) {
+  const host = req.headers.host;
+  const port = req.socket.localPort;
+  if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) return [421, "Unknown host"];
+  if (req.headers.origin !== `http://${host}`) return [403, "Forbidden origin"];
+  if ((req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase() !== "application/json") {
+    return [415, "Expected application/json"];
+  }
+  if (req.headers["x-od-token"] !== WRITE_TOKEN) return [403, "Stale viewer page. Reload it."];
+  return null;
+}
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -536,6 +554,14 @@ async function handle(req, res) {
     return handleSse(req, res);
   }
 
+  if (req.method === "POST") {
+    const rejected = rejectWrite(req);
+    if (rejected) {
+      res.writeHead(rejected[0]);
+      return res.end(rejected[1]);
+    }
+  }
+
   const designFinalize = pathname.match(/^\/data\/designs\/([^/]+)\/finalize$/);
   if (designFinalize && req.method === "POST") {
     return handleFinalize(req, res, decodeURIComponent(designFinalize[1]));
@@ -586,6 +612,11 @@ async function handle(req, res) {
   if (!abs) {
     res.writeHead(403);
     return res.end("Forbidden");
+  }
+  if (pathname === "/index.html") {
+    const html = await readFile(abs, "utf8");
+    res.writeHead(200, { "Content-Type": MIME[".html"], "Cache-Control": "no-store" });
+    return res.end(html.replace("</head>", `<meta name="od-write-token" content="${WRITE_TOKEN}">\n</head>`));
   }
   if (await serveFile(res, abs)) return;
   res.writeHead(404);
