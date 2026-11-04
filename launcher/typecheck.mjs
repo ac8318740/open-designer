@@ -4,13 +4,13 @@
 // the project's own TypeScript and, once components ship, the compiler
 // options of the tsconfig.json nearest the shipped components.
 //
-// Usage: node typecheck.mjs '{"projectRoot", "componentsDir", "shipped", "files"}'
+// Usage: node typecheck.mjs '{"projectRoot", "componentsDir", "ownDir", "shipped", "files"}'
 // Exits 1 with diagnostics on stdout when the check fails.
 
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
-const { projectRoot, componentsDir, shipped, files } = JSON.parse(process.argv[2]);
+const { projectRoot, componentsDir, ownDir, shipped, files } = JSON.parse(process.argv[2]);
 
 // A monorepo app keeps its TypeScript beside its components, not at the root.
 let ts;
@@ -52,7 +52,7 @@ const options = {
     // Design files sit outside the app, so they find React's types where TypeScript was found.
     "*": [join(nodeModules, "@types", "*"), join(nodeModules, "*")],
     ...base.paths,
-    ...(componentsDir ? { "@ds/*": [join(componentsDir, "*")] } : {}),
+    ...(componentsDir ? { "@ds/*": [componentsDir, ownDir].filter(Boolean).map((dir) => join(dir, "*")) } : {}),
   },
 };
 

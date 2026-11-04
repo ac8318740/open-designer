@@ -128,7 +128,12 @@ test('shipped components resolve to the app primitives through the app tsconfig 
     shippedComponents: 'app/src/ui/primitives',
   });
   write('.open-designer/designs/live/index.json', { designSystem: 'shipped', pages: [] });
-  write('.open-designer/designs/live/01-default.tsx', 'import { Card } from "@ds/card";\nexport default () => <Card title="x" />;\n');
+  // A component the design loop added after shipping still resolves from the design system.
+  write('.open-designer/design-systems/shipped/components/badge.tsx', 'export function Badge() {\n  return <b>new badge</b>;\n}\n');
+  write(
+    '.open-designer/designs/live/01-default.tsx',
+    'import { Card } from "@ds/card";\nimport { Badge } from "@ds/badge";\nexport default () => <><Card title="x" /><Badge /></>;\n',
+  );
   const html = await buildReactPage(data, 'designs/live/01-default.tsx');
   assert.doesNotMatch(html, /Build failed/);
   assert.doesNotMatch(html, /rel="stylesheet"/, 'a design system with no stylesheet links no CSS');
@@ -136,6 +141,7 @@ test('shipped components resolve to the app primitives through the app tsconfig 
   assert.match(page, /shipped \$\{s\}/);
   assert.doesNotMatch(page, /<section>/, "the app tsconfig jsx: preserve leaked into the build");
   assert.match(page, /"app\/src\/ui\/primitives\/card\.tsx"/);
+  assert.match(page, /"components\/badge\.tsx"/);
 });
 
 test('a failed build returns a page that shows the error', async () => {

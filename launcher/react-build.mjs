@@ -63,16 +63,18 @@ function readJson(path) {
 function designSystemOf(dataRoot, rel) {
   const parts = rel.split("/");
   const name = parts[0] === "design-systems" ? parts[1] : readJson(join(dataRoot, "designs", parts[1], "index.json"))?.designSystem;
-  if (!name) return { name: null, componentsDir: null, sourceRoot: null, shipped: false, stylesheet: null };
+  if (!name) return { name: null, componentsDir: null, sourceRoot: null, shipped: false, stylesheet: null, ownDir: null, dsDir: null };
   const dir = join(dataRoot, "design-systems", name);
   const manifest = readJson(join(dir, "manifest.json")) ?? {};
   const appRoot = resolve(manifest.shippedTo ?? dirname(dataRoot));
   const own = join(dir, "styles.css");
   const stylesheet = manifest.stylesheet ? resolve(appRoot, manifest.stylesheet) : existsSync(own) ? own : null;
   if (manifest.shippedComponents) {
-    return { name, componentsDir: resolve(appRoot, manifest.shippedComponents), sourceRoot: appRoot, shipped: true, stylesheet };
+    // ownDir still holds components the design loop added after shipping.
+    const ownDir = join(dir, "components");
+    return { name, componentsDir: resolve(appRoot, manifest.shippedComponents), sourceRoot: appRoot, shipped: true, stylesheet, ownDir, dsDir: dir };
   }
-  return { name, componentsDir: join(dir, "components"), sourceRoot: dir, shipped: false, stylesheet };
+  return { name, componentsDir: join(dir, "components"), sourceRoot: dir, shipped: false, stylesheet, ownDir: null, dsDir: dir };
 }
 
 const inside = (path, dir) => !!dir && path.startsWith(dir + sep);
@@ -112,9 +114,10 @@ async function bundlePage(esbuild, dataRoot, rel, ds, { prod, vendor, only }) {
   const plugin = {
     name: "open-designer",
     setup(b) {
-      b.onResolve({ filter: /^@ds\// }, (args) => {
+      b.onResolve({ filter: /^@ds\// }, async (args) => {
         if (!ds.componentsDir) return { errors: [{ text: `${args.path}: this page has no design system` }] };
-        return b.resolve(`./${args.path.slice(4)}`, { kind: args.kind, resolveDir: ds.componentsDir });
+        const r = await b.resolve(`./${args.path.slice(4)}`, { kind: args.kind, resolveDir: ds.componentsDir });
+        return r.errors.length && ds.ownDir ? b.resolve(`./${args.path.slice(4)}`, { kind: args.kind, resolveDir: ds.ownDir }) : r;
       });
       // Anything that resolves into node_modules comes from the vendor bundle.
       b.onResolve({ filter: /^[^./]/ }, async (args) => {
@@ -141,8 +144,9 @@ async function bundlePage(esbuild, dataRoot, rel, ds, { prod, vendor, only }) {
       });
       // Design-system components tag their own exports for the runtime.
       b.onLoad({ filter: /\.[jt]sx?$/ }, (args) => {
-        if (!inside(args.path, ds.componentsDir)) return undefined;
-        const source = relative(ds.sourceRoot, args.path).replace(/\\/g, "/");
+        const own = inside(args.path, ds.ownDir);
+        if (!own && !inside(args.path, ds.componentsDir)) return undefined;
+        const source = relative(own ? ds.dsDir : ds.sourceRoot, args.path).replace(/\\/g, "/");
         return {
           contents:
             readFileSync(args.path, "utf8") +
@@ -412,7 +416,7 @@ export async function typecheckChosen(dataRoot, design, index, chosen) {
     .map((file) => join(dataRoot, "designs", design, file));
   if (files.length === 0) return null;
   const ds = designSystemOf(dataRoot, `designs/${design}/x.tsx`);
-  const args = { projectRoot: dirname(dataRoot), componentsDir: ds.componentsDir, shipped: ds.shipped, files };
+  const args = { projectRoot: dirname(dataRoot), componentsDir: ds.componentsDir, ownDir: ds.ownDir, shipped: ds.shipped, files };
   const child = spawn(process.execPath, [TYPECHECK, JSON.stringify(args)], { stdio: ["ignore", "pipe", "inherit"] });
   let output = "";
   child.stdout.on("data", (d) => (output += d));
