@@ -3,25 +3,30 @@
 // A design or design-system page whose file ends in .tsx default-exports a
 // component. The launcher builds it with esbuild each time the frame asks for
 // it, which the viewer does on every save, into
-// .open-designer/.build/<same path>.html and .js. Packages from node_modules
-// (React, Radix, ...) go into one vendor bundle per design system and reach
-// each page through window.__odVendor, so a page rebuild stays small.
+// .open-designer/.build/<same path>.html, .js, and .css. Packages from
+// node_modules (React, Radix, ...) go into one vendor bundle per design system
+// and reach each page through window.__odVendor, so a page rebuild stays small.
+// buildSingleFile instead inlines one page, all its variants, and a production
+// vendor bundle into one HTML file for hosts without an OpenDesigner server.
 //
 // `@ds/<name>` imports resolve to the design system's components/ folder, or
 // to the project's real primitives once manifest.shippedComponents is set.
 // Each file's nearest tsconfig.json still resolves its own path aliases.
+//
+// CSS comes from the project's own Tailwind, run on the design system's
+// stylesheet (see designSystemOf) over the classes the page bundle contains.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { injectBridge } from "./finalize.mjs";
 
 const RUNTIME = fileURLToPath(new URL("./react-runtime.js", import.meta.url));
 const TYPECHECK = fileURLToPath(new URL("./typecheck.mjs", import.meta.url));
-const TAILWIND = "https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4";
+const BRIDGE = fileURLToPath(new URL("../viewer/dist/od-bridge.js", import.meta.url));
 const SKIP = Symbol("od-skip");
-// Development React: designs are for iterating, and its warnings help.
-const DEFINE = { "process.env.NODE_ENV": '"development"' };
 
 // Data-root-relative paths that build as React pages.
 export const REACT_PAGE = /^(designs\/[^/]+|design-systems\/[^/]+\/pages)\/[^/]+\.tsx$/;
@@ -51,18 +56,22 @@ function readJson(path) {
   }
 }
 
-// The design system a page belongs to, and where its components live.
+// The design system a page belongs to, where its components live, and the
+// stylesheet Tailwind compiles: manifest.stylesheet (relative to shippedTo,
+// or to the project root), else the design system's own styles.css.
 function designSystemOf(dataRoot, rel) {
   const parts = rel.split("/");
   const name = parts[0] === "design-systems" ? parts[1] : readJson(join(dataRoot, "designs", parts[1], "index.json"))?.designSystem;
-  if (!name) return { name: null, componentsDir: null, sourceRoot: null, shipped: false };
+  if (!name) return { name: null, componentsDir: null, sourceRoot: null, shipped: false, stylesheet: null };
   const dir = join(dataRoot, "design-systems", name);
   const manifest = readJson(join(dir, "manifest.json")) ?? {};
+  const appRoot = resolve(manifest.shippedTo ?? dirname(dataRoot));
+  const own = join(dir, "styles.css");
+  const stylesheet = manifest.stylesheet ? resolve(appRoot, manifest.stylesheet) : existsSync(own) ? own : null;
   if (manifest.shippedComponents) {
-    const sourceRoot = resolve(manifest.shippedTo ?? dirname(dataRoot));
-    return { name, componentsDir: resolve(sourceRoot, manifest.shippedComponents), sourceRoot, shipped: true };
+    return { name, componentsDir: resolve(appRoot, manifest.shippedComponents), sourceRoot: appRoot, shipped: true, stylesheet };
   }
-  return { name, componentsDir: join(dir, "components"), sourceRoot: dir, shipped: false };
+  return { name, componentsDir: join(dir, "components"), sourceRoot: dir, shipped: false, stylesheet };
 }
 
 const inside = (path, dir) => !!dir && path.startsWith(dir + sep);
@@ -74,15 +83,29 @@ function fixturePath(projectRoot, path) {
   return m ? m[1].replace(/\\/g, "/") : relative(projectRoot, path).replace(/\\/g, "/");
 }
 
-async function build(dataRoot, rel) {
-  const esbuild = await import("esbuild");
+// Resolve a package from the first directory that has it. A monorepo app
+// keeps its packages beside its components or stylesheet, not at the root.
+function resolveFrom(spec, dirs) {
+  for (const dir of dirs.filter(Boolean)) {
+    try {
+      return createRequire(join(dir, "noop.js")).resolve(spec);
+    } catch {
+      /* try the next directory */
+    }
+  }
+  return null;
+}
+
+const defineFor = (prod) => ({ "process.env.NODE_ENV": prod ? '"production"' : '"development"' });
+
+/**
+ * Bundle one page without its packages. `only` guards the mount so a
+ * single-file build can carry every variant and render the one its
+ * <meta name="od-variant"> names.
+ */
+async function bundlePage(esbuild, dataRoot, rel, ds, { prod, vendor, only }) {
   const projectRoot = dirname(dataRoot);
   const page = join(dataRoot, rel);
-  const ds = designSystemOf(dataRoot, rel);
-  const buildRoot = join(dataRoot, ".build");
-  const out = join(buildRoot, rel.replace(/\.tsx$/, ""));
-  const vendorBase = join(buildRoot, "_vendor", ds.name ?? "_none");
-  const vendor = readJson(`${vendorBase}.json`) ?? {};
   const needed = {};
 
   const plugin = {
@@ -131,6 +154,7 @@ async function build(dataRoot, rel) {
     },
   };
 
+  const mount = "mount(createRoot, createElement, Page);";
   const result = await esbuild.build({
     stdin: {
       contents: [
@@ -138,7 +162,7 @@ async function build(dataRoot, rel) {
         `import { createElement } from "react";`,
         `import { createRoot } from "react-dom/client";`,
         `import { mount } from ${JSON.stringify(RUNTIME)};`,
-        `mount(createRoot, createElement, Page);`,
+        only ? `if (document.querySelector('meta[name="od-variant"]')?.content === ${JSON.stringify(only)}) ${mount}` : mount,
       ].join("\n"),
       resolveDir: dirname(page),
       sourcefile: rel,
@@ -147,45 +171,92 @@ async function build(dataRoot, rel) {
     format: "iife",
     target: "es2020",
     jsx: "automatic",
-    define: DEFINE,
-    outfile: `${out}.js`,
-    metafile: true,
+    define: defineFor(prod),
+    minify: prod,
+    outfile: join(dataRoot, ".build", rel.replace(/\.tsx$/, ".js")),
+    write: false,
     logLevel: "silent",
     plugins: [plugin],
   });
+  const text = (ext) => result.outputFiles.filter((f) => f.path.endsWith(ext)).map((f) => f.text).join("\n");
+  return { js: text(".js"), css: text(".css"), needed };
+}
+
+async function bundleVendor(esbuild, projectRoot, packages, prod) {
+  const result = await esbuild.build({
+    stdin: {
+      contents: `window.__odVendor = {${Object.entries(packages)
+        .map(([spec, path]) => `${JSON.stringify(spec)}: require(${JSON.stringify(path)})`)
+        .join(",\n")}};`,
+      resolveDir: projectRoot,
+      sourcefile: "od-vendor.js",
+    },
+    bundle: true,
+    format: "iife",
+    target: "es2020",
+    define: defineFor(prod),
+    minify: prod,
+    write: false,
+    logLevel: "silent",
+  });
+  return result.outputFiles[0].text;
+}
+
+/**
+ * Compile the design system's stylesheet with the project's own Tailwind
+ * over the class candidates in `content`. Returns "" with no stylesheet.
+ */
+async function tailwindCss(ds, projectRoot, content, prod) {
+  if (!ds.stylesheet) return "";
+  if (!existsSync(ds.stylesheet)) throw new Error(`stylesheet not found: ${ds.stylesheet}`);
+  const dirs = [dirname(ds.stylesheet), ds.componentsDir, projectRoot];
+  const node = resolveFrom("@tailwindcss/node", dirs);
+  const oxide = resolveFrom("@tailwindcss/oxide", dirs);
+  if (!node || !oxide) throw new Error(`${ds.stylesheet} needs Tailwind v4: install tailwindcss and @tailwindcss/postcss beside it`);
+  const { compile, optimize } = await import(pathToFileURL(node).href);
+  const { Scanner } = createRequire(oxide)(oxide);
+  const compiler = await compile(readFileSync(ds.stylesheet, "utf8"), {
+    base: dirname(ds.stylesheet),
+    from: ds.stylesheet,
+    onDependency: () => {},
+  });
+  const css = compiler.build(new Scanner({}).scanFiles([{ content, extension: "js" }]));
+  // optimize flattens nesting for older browsers, as the PostCSS plugin does.
+  return optimize ? optimize(css, { file: ds.stylesheet, minify: prod }).code : css;
+}
+
+async function build(dataRoot, rel) {
+  const esbuild = await import("esbuild");
+  const projectRoot = dirname(dataRoot);
+  const ds = designSystemOf(dataRoot, rel);
+  const buildRoot = join(dataRoot, ".build");
+  const out = join(buildRoot, rel.replace(/\.tsx$/, ""));
+  const vendorBase = join(buildRoot, "_vendor", ds.name ?? "_none");
+  const vendor = readJson(`${vendorBase}.json`) ?? {};
+
+  const { js, css, needed } = await bundlePage(esbuild, dataRoot, rel, ds, { prod: false, vendor });
+  const styles = [await tailwindCss(ds, projectRoot, js, false), css].filter(Boolean).join("\n");
+  mkdirSync(dirname(out), { recursive: true });
+  writeFileSync(`${out}.js`, js);
+  writeFileSync(`${out}.css`, styles);
 
   // shortcut: the vendor bundle only rebuilds when a page needs a new package,
   // so upgrading a package in node_modules needs `rm -r .open-designer/.build`.
   if (Object.keys(needed).some((spec) => !(spec in vendor)) || !existsSync(`${vendorBase}.js`)) {
     const all = { ...vendor, ...needed };
-    await esbuild.build({
-      stdin: {
-        contents: `window.__odVendor = {${Object.entries(all)
-          .map(([spec, path]) => `${JSON.stringify(spec)}: require(${JSON.stringify(path)})`)
-          .join(",\n")}};`,
-        resolveDir: projectRoot,
-        sourcefile: "od-vendor.js",
-      },
-      bundle: true,
-      format: "iife",
-      target: "es2020",
-      define: DEFINE,
-      outfile: `${vendorBase}.js`,
-      logLevel: "silent",
-    });
+    mkdirSync(dirname(vendorBase), { recursive: true });
+    writeFileSync(`${vendorBase}.js`, await bundleVendor(esbuild, projectRoot, all, false));
     writeFileSync(`${vendorBase}.json`, JSON.stringify(all, null, 2));
   }
   writeFileSync(join(buildRoot, ".gitignore"), "*\n");
 
   const url = (abs) => `/data/${relative(dataRoot, abs).split(sep).join("/")}`;
-  const css = Object.keys(result.metafile.outputs).some((o) => o.endsWith(".css"));
   const html = `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<script src="${TAILWIND}"></script>
-${css ? `<link rel="stylesheet" href="${url(`${out}.css`)}">\n` : ""}</head>
+${styles ? `<link rel="stylesheet" href="${url(`${out}.css`)}">\n` : ""}</head>
 <body>
 <div id="od-root"></div>
 <script src="${url(`${vendorBase}.js`)}"></script>
@@ -193,9 +264,91 @@ ${css ? `<link rel="stylesheet" href="${url(`${out}.css`)}">\n` : ""}</head>
 </body>
 </html>
 `;
-  mkdirSync(dirname(out), { recursive: true });
   writeFileSync(`${out}.html`, html);
   return html;
+}
+
+// Token sheets in parent-to-child order, as the viewer sends them.
+function tokenSheets(dataRoot, name, seen = new Set()) {
+  if (!name || seen.has(name)) return [];
+  seen.add(name);
+  const dir = join(dataRoot, "design-systems", name);
+  const parent = readJson(join(dir, "manifest.json"))?.extends;
+  const own = existsSync(join(dir, "tokens.css")) ? [{ name, css: readFileSync(join(dir, "tokens.css"), "utf8") }] : [];
+  return [...tokenSheets(dataRoot, parent, seen), ...own];
+}
+
+// Inline text must not close its own element or open an HTML comment.
+const inlineScript = (js) => js.replace(/<\/script/gi, "<\\/script").replace(/<!--/g, "<\\!--");
+const inlineStyle = (css) => css.replace(/<\/style/gi, "<\\/style");
+
+/**
+ * Write one design page, every variant, and its tweak definitions as one
+ * self-contained HTML file: production React, minified, with the bridge
+ * inlined as <script data-od-bridge>. The variant shown is the one
+ * <meta name="od-variant" content="..."> names; a host switches variant by
+ * rewriting that content and reloading. <script type="application/json"
+ * id="od-page"> holds the variant list and the tweak definitions.
+ *
+ * @param {string} dataRoot  Absolute path of .open-designer
+ * @param {string} design
+ * @param {string} pageId
+ * @param {string} [outPath]  Defaults to .build/single/<design>/<page>.html
+ * @returns {Promise<{ path: string, size: number, design: string, page: string, variant: string, variants: string[] }>}
+ */
+export async function buildSingleFile(dataRoot, design, pageId, outPath) {
+  const esbuild = await import("esbuild");
+  const projectRoot = dirname(dataRoot);
+  const index = readJson(join(dataRoot, "designs", design, "index.json"));
+  if (!index) throw new Error(`no readable designs/${design}/index.json`);
+  const page = index.pages?.find((p) => p.id === pageId);
+  if (!page) throw new Error(`design ${design} has no page ${pageId}; pages: ${(index.pages ?? []).map((p) => p.id).join(", ") || "none"}`);
+  const variants = page.variants ?? [];
+  if (variants.length === 0) throw new Error(`page ${pageId} has no variants`);
+  const html = variants.find((v) => !v.file?.endsWith(".tsx"));
+  if (html) throw new Error(`variant ${html.id} (${html.file}) is not a React page; single-file builds need .tsx variants`);
+  if (!existsSync(BRIDGE)) throw new Error(`the bridge build is missing at ${BRIDGE}; run npm run build:viewer`);
+
+  const ds = designSystemOf(dataRoot, `designs/${design}/x.tsx`);
+  const packages = {};
+  const bundles = [];
+  for (const v of variants) {
+    const b = await bundlePage(esbuild, dataRoot, `designs/${design}/${v.file}`, ds, { prod: true, vendor: packages, only: v.id });
+    Object.assign(packages, b.needed);
+    bundles.push(b);
+  }
+  const vendor = await bundleVendor(esbuild, projectRoot, packages, true);
+  const js = bundles.map((b) => b.js).join("\n");
+  const css = [await tailwindCss(ds, projectRoot, js, true), ...bundles.map((b) => b.css)].filter(Boolean).join("\n");
+  const meta = {
+    design,
+    designSystem: ds.name,
+    page: { id: page.id, label: page.label, tweaks: page.tweaks ?? [] },
+    designTweaks: index.tweaks ?? [],
+    variants: variants.map(({ id, label, file, tweaks, discardReason }) => ({ id, label, file, tweaks: tweaks ?? [], discardReason })),
+  };
+  const doc = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="od-variant" content="${variants[0].id.replace(/[&"<]/g, "")}">
+${tokenSheets(dataRoot, ds.name).map((s) => `<style data-od-tokens="${s.name}">${inlineStyle(s.css)}</style>`).join("\n")}
+<style data-od-css>${inlineStyle(css)}</style>
+<script type="application/json" id="od-page">${JSON.stringify(meta).replace(/</g, "\\u003c")}</script>
+</head>
+<body>
+<div id="od-root"></div>
+<script>${inlineScript(vendor)}</script>
+${bundles.map((b) => `<script>${inlineScript(b.js)}</script>`).join("\n")}
+</body>
+</html>
+`;
+  const path = resolve(outPath ?? join(dataRoot, ".build", "single", design, `${pageId}.html`));
+  const file = injectBridge(doc, readFileSync(BRIDGE, "utf8"));
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, file);
+  return { path, size: Buffer.byteLength(file), design, page: pageId, variant: variants[0].id, variants: variants.map((v) => v.id) };
 }
 
 function errorPage(err) {

@@ -21,11 +21,13 @@ const write = (path, content) => {
 };
 
 write('.open-designer/design-systems/demo/manifest.json', { name: 'demo', framework: 'react' });
+write('.open-designer/design-systems/demo/tokens.css', ':root { --demo-ink: #101828; }\n');
+write('.open-designer/design-systems/demo/styles.css', '@import "tailwindcss";\n@theme { --color-brand: #123456; }\n');
 write(
   '.open-designer/design-systems/demo/components/card.tsx',
   `export type CardProps = { title: string; tags: string[] };
 export function Card({ title, tags }: CardProps) {
-  return <article className="p-4"><h2>{title}</h2><ul>{tags.map((t) => <li key={t}>{t}</li>)}</ul></article>;
+  return <article className="bg-brand p-4"><h2>{title}</h2><ul>{tags.map((t) => <li key={t}>{t}</li>)}</ul></article>;
 }
 `,
 );
@@ -67,7 +69,13 @@ after(() => rmSync(project, { recursive: true, force: true }));
 test('a React page builds into .build with the vendor bundle beside it', async () => {
   const html = await buildReactPage(data, 'designs/home/01-default.tsx');
   assert.match(html, /<div id="od-root"><\/div>/);
-  assert.match(html, /<script src="https:\/\/cdn\.jsdelivr\.net\/npm\/@tailwindcss\/browser@4"><\/script>/);
+  assert.doesNotMatch(html, /tailwindcss\/browser/);
+  assert.match(html, /<link rel="stylesheet" href="\/data\/\.build\/designs\/home\/01-default\.css">/);
+  // The project's Tailwind compiled the design system's theme over the page's classes only.
+  const css = readFileSync(join(data, '.build/designs/home/01-default.css'), 'utf8');
+  assert.match(css, /\.bg-brand\s*\{\s*background-color: var\(--color-brand\)/);
+  assert.match(css, /--color-brand: #123456/);
+  assert.doesNotMatch(css, /\.bg-red-500/);
   assert.match(html, /<script src="\/data\/\.build\/_vendor\/demo\.js"><\/script>\s*<script src="\/data\/\.build\/designs\/home\/01-default\.js"><\/script>/);
   assert.equal(readFileSync(join(data, '.build/designs/home/01-default.html'), 'utf8'), html);
   const vendor = readFileSync(join(data, '.build/_vendor/demo.js'), 'utf8');
@@ -123,6 +131,7 @@ test('shipped components resolve to the app primitives through the app tsconfig 
   write('.open-designer/designs/live/01-default.tsx', 'import { Card } from "@ds/card";\nexport default () => <Card title="x" />;\n');
   const html = await buildReactPage(data, 'designs/live/01-default.tsx');
   assert.doesNotMatch(html, /Build failed/);
+  assert.doesNotMatch(html, /rel="stylesheet"/, 'a design system with no stylesheet links no CSS');
   const page = readFileSync(join(data, '.build/designs/live/01-default.js'), 'utf8');
   assert.match(page, /shipped \$\{s\}/);
   assert.doesNotMatch(page, /<section>/, "the app tsconfig jsx: preserve leaked into the build");
@@ -188,4 +197,77 @@ test('the launcher leaves framework: html designs untouched', async () => {
   assert.equal(r.csp, frameCsp(new URL(base).host));
   assert.equal(r.body.replace(/<script data-od-bridge>[\s\S]*?<\/script>/, ''), PLAIN);
   assert.equal(existsSync(join(data, '.build/designs/home/02-plain.html')), false);
+});
+
+const bridge = join(root, 'viewer/dist/od-bridge.js');
+
+write('.open-designer/designs/multi/index.json', {
+  designSystem: 'demo',
+  tweaks: [{ id: 'density', type: 'select', label: 'Density', target: '--density', options: ['compact', 'cozy'], default: 'cozy' }],
+  pages: [
+    {
+      id: 'home',
+      label: 'Home',
+      tweaks: [{ id: 'empty', type: 'state', label: 'Empty', values: ['no', 'yes'] }],
+      variants: [
+        { id: '01', label: 'Cards', file: '01-cards.tsx' },
+        { id: '02', label: 'List', file: '02-list.tsx', discardReason: 'denser' },
+      ],
+    },
+  ],
+});
+write('.open-designer/designs/multi/01-cards.tsx', 'import { Card } from "@ds/card";\nexport default () => <Card title="Cards variant" tags={["a"]} />;\n');
+write('.open-designer/designs/multi/02-list.tsx', 'export default () => <ul className="bg-brand"><li>List variant</li></ul>;\n');
+
+const cli = (args) =>
+  new Promise((ok) => {
+    const child = spawn(process.execPath, [join(root, 'launcher/serve.mjs'), 'build', ...args], { cwd: project });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => (stdout += d));
+    child.stderr.on('data', (d) => (stderr += d));
+    child.on('close', (code) => ok({ code, stdout, stderr }));
+  });
+
+test('open-designer build writes one self-contained page with every variant', async () => {
+  assert.ok(existsSync(bridge), 'run npm run build:viewer first: the single-file build inlines viewer/dist/od-bridge.js');
+  const r = await cli(['multi', '--page', 'home']);
+  assert.equal(r.code, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.equal(out.path, join(data, '.build/single/multi/home.html'));
+  assert.deepEqual({ ...out, path: undefined, size: undefined }, { path: undefined, size: undefined, design: 'multi', page: 'home', variant: '01', variants: ['01', '02'] });
+  const html = readFileSync(out.path, 'utf8');
+  assert.equal(out.size, Buffer.byteLength(html));
+  assert.ok(out.size < 400_000, `${out.size} bytes: production React should be well under 400 KB`);
+  assert.match(html, /<head><script data-od-bridge>/);
+  assert.doesNotMatch(html, /<script src=|<link /, 'nothing loads from a server');
+  assert.ok(!html.includes('react.development'));
+  assert.match(html, /<style data-od-tokens="demo">:root \{ --demo-ink: #101828; \}/);
+  assert.match(html, /<style data-od-css>[\s\S]*\.bg-brand/);
+  const meta = JSON.parse(/<script type="application\/json" id="od-page">(.*?)<\/script>/.exec(html)[1]);
+  assert.equal(meta.designTweaks[0].id, 'density');
+  assert.equal(meta.page.tweaks[0].id, 'empty');
+  assert.deepEqual(meta.variants.map((v) => [v.id, v.label, v.discardReason]), [['01', 'Cards', undefined], ['02', 'List', 'denser']]);
+
+  // The host switches variant by rewriting <meta name="od-variant">.
+  for (const [variant, text] of [['01', 'Cards variant'], ['02', 'List variant']]) {
+    const window = new Window({ url: 'http://127.0.0.1/', console, settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } }); // our own build
+    try {
+      window.document.write(html.replace('<meta name="od-variant" content="01">', `<meta name="od-variant" content="${variant}">`));
+      await window.happyDOM.waitUntilComplete();
+      assert.match(window.document.getElementById('od-root').textContent, new RegExp(`^${text}`));
+    } finally {
+      await window.happyDOM.close();
+    }
+  }
+});
+
+test('open-designer build fails clearly on an HTML page and on bad arguments', async () => {
+  const html = await cli(['home', '--page', 'home']);
+  assert.equal(html.code, 1);
+  assert.match(html.stderr, /open-designer build failed: variant 02 \(02-plain\.html\) is not a React page/);
+  const missing = await cli(['multi', '--page', 'nope']);
+  assert.equal(missing.code, 1);
+  assert.match(missing.stderr, /has no page nope; pages: home/);
+  assert.equal((await cli(['multi'])).code, 2);
 });

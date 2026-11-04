@@ -37,8 +37,9 @@ jobs:
             git merge-base --is-ancestor HEAD origin/main
           fi
       - run: npm ci --no-audit --no-fund
-      - run: npm test
+      # The single-file build test inlines viewer/dist/od-bridge.js.
       - run: npm run build:viewer
+      - run: npm test
       - run: npm --prefix viewer test -- --run
       - run: npm --prefix viewer exec -- tsc --noEmit -p viewer/tsconfig.json
       - name: Pack and test the release artifact

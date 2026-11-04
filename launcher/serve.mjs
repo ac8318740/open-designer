@@ -25,7 +25,32 @@ import {
   titlecaseId,
   validateDesignIndex,
 } from "./finalize.mjs";
-import { REACT_PAGE, buildReactPage, typecheckChosen } from "./react-build.mjs";
+import { REACT_PAGE, buildReactPage, buildSingleFile, typecheckChosen } from "./react-build.mjs";
+
+// `open-designer build <design> --page <id> [--out <file>]` writes one page as
+// one self-contained HTML file and prints {path, size, design, page, variant,
+// variants} as JSON. Exit 1 on a failed build, 2 on bad arguments.
+if (process.argv[2] === "build") {
+  const [design, ...rest] = process.argv.slice(3);
+  const flag = (name) => {
+    const i = rest.indexOf(name);
+    return i === -1 ? undefined : rest[i + 1];
+  };
+  const page = flag("--page");
+  if (!design || !page || !isValidDesignName(design)) {
+    console.error("usage: open-designer build <design> --page <page id> [--out <file>]");
+    process.exit(2);
+  }
+  try {
+    const result = await buildSingleFile(join(process.cwd(), ".open-designer"), design, page, flag("--out"));
+    console.log(JSON.stringify(result));
+    process.exit(0);
+  } catch (err) {
+    const detail = err.errors?.length ? err.errors.map((e) => `${e.location ? `${e.location.file}:${e.location.line}: ` : ""}${e.text}`).join("\n") : err.message;
+    console.error(`open-designer build failed: ${detail}`);
+    process.exit(1);
+  }
+}
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const PLUGIN_ROOT = resolve(__dirname, "..");

@@ -184,6 +184,9 @@ export interface DesignSystemManifest {
   framework?: "react" | "html";
   // Once shipped, `@ds/*` imports resolve here, relative to shippedTo.
   shippedComponents?: string;
+  // Stylesheet the project's Tailwind compiles for React designs, relative
+  // to shippedTo (or the project root). Defaults to the DS's own styles.css.
+  stylesheet?: string;
 }
 
 export interface DesignSystemIndexPages {
