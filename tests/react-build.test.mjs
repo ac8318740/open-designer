@@ -262,12 +262,85 @@ test('open-designer build writes one self-contained page with every variant', as
   }
 });
 
-test('open-designer build fails clearly on an HTML page and on bad arguments', async () => {
+test('open-designer build fails clearly on mixed variants and on bad arguments', async () => {
   const html = await cli(['home', '--page', 'home']);
   assert.equal(html.code, 1);
-  assert.match(html.stderr, /open-designer build failed: variant 02 \(02-plain\.html\) is not a React page/);
+  assert.match(html.stderr, /open-designer build failed: variant 02 \(02-plain\.html\) does not match/);
   const missing = await cli(['multi', '--page', 'nope']);
   assert.equal(missing.code, 1);
   assert.match(missing.stderr, /has no page nope; pages: home/);
   assert.equal((await cli(['multi'])).code, 2);
+});
+
+write('.open-designer/designs/site/index.json', {
+  designSystem: 'demo',
+  pages: [
+    {
+      id: 'home',
+      variants: [
+        { id: '01-a', label: 'A', file: 'home/01-a.html' },
+        { id: '02-b', label: 'B', file: 'home/02-b.html', discardReason: 'x' },
+      ],
+    },
+  ],
+});
+write('.open-designer/designs/site/_shared/base.css', '@import "./type.css";\n@import url("https://fonts.example/x.css");\n.logo { background: url(logo.svg); }\n');
+write('.open-designer/designs/site/_shared/type.css', '@font-face { font-family: X; src: url("./x.woff2"); }\nbody { font-family: X; }\n');
+write('.open-designer/designs/site/_shared/x.woff2', 'font-bytes');
+write('.open-designer/designs/site/_shared/logo.svg', '<svg xmlns="http://www.w3.org/2000/svg"/>');
+write('.open-designer/designs/site/_shared/app.js', 'document.body.setAttribute("data-app", document.querySelector("h1").textContent);\n');
+const page = (title) => `<!doctype html>
+<html><head>
+<link rel="stylesheet" href="../../../design-systems/demo/tokens.css" />
+<link rel="stylesheet" href="../_shared/base.css" />
+<link rel="stylesheet" href="https://fonts.example/remote.css" />
+<link rel="icon" href="/favicon.svg" />
+</head><body>
+<h1>${title}</h1>
+<img src="../_shared/logo.svg" alt="">
+<script src="../_shared/app.js" defer></script>
+</body></html>`;
+write('.open-designer/designs/site/home/01-a.html', page('Variant A'));
+write('.open-designer/designs/site/home/02-b.html', page('Variant B'));
+
+test('open-designer build inlines an HTML design and its local assets', async () => {
+  const r = await cli(['site', '--page', 'home']);
+  assert.equal(r.code, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.deepEqual(out.variants, ['01-a', '02-b']);
+  const html = readFileSync(out.path, 'utf8');
+  assert.match(html, /<head><script data-od-bridge>/);
+  const meta = JSON.parse(/<script type="application\/json" id="od-page">(.*?)<\/script>/.exec(html)[1]);
+  assert.deepEqual(meta.variants.map((v) => v.file), ['home/01-a.html', 'home/02-b.html']);
+  const doc = Buffer.from(/<script type="text\/plain" id="od-variant-01-a">(.*?)<\/script>/.exec(html)[1], 'base64').toString();
+  assert.match(doc, /<style data-od-tokens="demo">:root \{ --demo-ink/);
+  assert.match(doc, /<style>@import url\("https:\/\/fonts\.example\/x\.css"\);\n@font-face/, 'remote @import hoisted to the top');
+  assert.match(doc, /src: url\("data:font\/woff2;base64,/);
+  assert.match(doc, /\.logo \{ background: url\("data:image\/svg\+xml;base64,/);
+  assert.match(doc, /<link rel="stylesheet" href="https:\/\/fonts\.example\/remote\.css" \/>/);
+  assert.match(doc, /<link rel="icon" href="\/favicon\.svg" \/>/, 'icons are left alone');
+  assert.match(doc, /<img src="data:image\/svg\+xml;base64,/);
+  assert.match(doc, /<script>document\.body\.setAttribute[\s\S]*<\/script>\n?<\/body>/, 'the deferred script runs at the end of <body>');
+  assert.doesNotMatch(doc, /\.\.\/_shared/);
+
+  for (const [variant, title] of [['01-a', 'Variant A'], ['02-b', 'Variant B']]) {
+    const window = new Window({ url: 'http://127.0.0.1/', console, settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
+    try {
+      window.document.write(html.replace('<meta name="od-variant" content="01-a">', `<meta name="od-variant" content="${variant}">`));
+      await window.happyDOM.waitUntilComplete();
+      assert.equal(window.document.querySelector('h1')?.textContent, title);
+      assert.equal(window.document.body.getAttribute('data-app'), title);
+    } finally {
+      await window.happyDOM.close();
+    }
+  }
+});
+
+test('open-designer build refuses HTML assets outside .open-designer', async () => {
+  for (const [href, reason] of [['../../../../outside.css', /resolves outside \.open-designer/], ['/abs.css', /is an absolute path/]]) {
+    write('.open-designer/designs/site/home/01-a.html', `<html><head><link rel="stylesheet" href="${href}"></head><body></body></html>`);
+    const r = await cli(['site', '--page', 'home']);
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, reason);
+  }
 });

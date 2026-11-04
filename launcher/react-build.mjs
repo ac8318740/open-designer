@@ -22,6 +22,7 @@ import { createRequire } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { injectBridge } from "./finalize.mjs";
+import { inlineHtmlDesign, inlineScript, inlineStyle } from "./html-inline.mjs";
 
 const RUNTIME = fileURLToPath(new URL("./react-runtime.js", import.meta.url));
 const TYPECHECK = fileURLToPath(new URL("./typecheck.mjs", import.meta.url));
@@ -278,9 +279,15 @@ function tokenSheets(dataRoot, name, seen = new Set()) {
   return [...tokenSheets(dataRoot, parent, seen), ...own];
 }
 
-// Inline text must not close its own element or open an HTML comment.
-const inlineScript = (js) => js.replace(/<\/script/gi, "<\\/script").replace(/<!--/g, "<\\!--");
-const inlineStyle = (css) => css.replace(/<\/style/gi, "<\\/style");
+// HTML variants are whole documents, so the single file carries each one
+// base64-encoded and writes the one <meta name="od-variant"> names while the
+// page parses. document.write keeps the parser's script order and timing.
+const HTML_BOOT = `(function () {
+  var id = document.querySelector('meta[name="od-variant"]').getAttribute("content");
+  var el = document.getElementById("od-variant-" + id) || document.querySelector('script[id^="od-variant-"]');
+  var bytes = Uint8Array.from(atob(el.textContent.trim()), function (c) { return c.charCodeAt(0); });
+  document.write(new TextDecoder().decode(bytes).replace(/^\\s*<!doctype[^>]*>/i, ""));
+})();`;
 
 /**
  * Write one design page, every variant, and its tweak definitions as one
@@ -305,11 +312,48 @@ export async function buildSingleFile(dataRoot, design, pageId, outPath) {
   if (!page) throw new Error(`design ${design} has no page ${pageId}; pages: ${(index.pages ?? []).map((p) => p.id).join(", ") || "none"}`);
   const variants = page.variants ?? [];
   if (variants.length === 0) throw new Error(`page ${pageId} has no variants`);
-  const html = variants.find((v) => !v.file?.endsWith(".tsx"));
-  if (html) throw new Error(`variant ${html.id} (${html.file}) is not a React page; single-file builds need .tsx variants`);
+  const kind = (v) => (v.file?.endsWith(".tsx") ? "React" : v.file?.endsWith(".html") ? "HTML" : null);
+  const odd = variants.find((v) => !kind(v) || kind(v) !== kind(variants[0]));
+  const outside = variants.find((v) => !resolve(dataRoot, "designs", design, v.file ?? "").startsWith(join(dataRoot, "designs", design) + sep));
+  if (outside) throw new Error(`variant ${outside.id} (${outside.file}) is outside designs/${design}`);
+  if (odd) throw new Error(`variant ${odd.id} (${odd.file}) does not match: a page's variants must all be .tsx or all be .html`);
   if (!existsSync(BRIDGE)) throw new Error(`the bridge build is missing at ${BRIDGE}; run npm run build:viewer`);
 
   const ds = designSystemOf(dataRoot, `designs/${design}/x.tsx`);
+  const meta = {
+    design,
+    designSystem: ds.name,
+    page: { id: page.id, label: page.label, tweaks: page.tweaks ?? [] },
+    designTweaks: index.tweaks ?? [],
+    variants: variants.map(({ id, label, file, tweaks, discardReason }) => ({ id, label, file, tweaks: tweaks ?? [], discardReason })),
+  };
+  const head = `<meta name="od-variant" content="${escapeId(variants[0].id)}">
+<script type="application/json" id="od-page">${JSON.stringify(meta).replace(/</g, "\\u003c")}</script>`;
+  const write = (doc) => {
+    const path = resolve(outPath ?? join(dataRoot, ".build", "single", design, `${pageId}.html`));
+    const file = injectBridge(doc, readFileSync(BRIDGE, "utf8"));
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, file);
+    return { path, size: Buffer.byteLength(file), design, page: pageId, variant: variants[0].id, variants: variants.map((v) => v.id) };
+  };
+
+  if (kind(variants[0]) === "HTML") {
+    const docs = variants.map(
+      (v) =>
+        `<script type="text/plain" id="od-variant-${escapeId(v.id)}">${Buffer.from(inlineHtmlDesign(dataRoot, join(dataRoot, "designs", design, v.file))).toString("base64")}</script>`,
+    );
+    return write(`<!doctype html>
+<html>
+<head>
+${head}
+${docs.join("\n")}
+<script>${HTML_BOOT}</script>
+</head>
+<body></body>
+</html>
+`);
+  }
+
   const packages = {};
   const bundles = [];
   for (const v of variants) {
@@ -320,22 +364,14 @@ export async function buildSingleFile(dataRoot, design, pageId, outPath) {
   const vendor = await bundleVendor(esbuild, projectRoot, packages, true);
   const js = bundles.map((b) => b.js).join("\n");
   const css = [await tailwindCss(ds, projectRoot, js, true), ...bundles.map((b) => b.css)].filter(Boolean).join("\n");
-  const meta = {
-    design,
-    designSystem: ds.name,
-    page: { id: page.id, label: page.label, tweaks: page.tweaks ?? [] },
-    designTweaks: index.tweaks ?? [],
-    variants: variants.map(({ id, label, file, tweaks, discardReason }) => ({ id, label, file, tweaks: tweaks ?? [], discardReason })),
-  };
-  const doc = `<!doctype html>
+  return write(`<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="od-variant" content="${variants[0].id.replace(/[&"<]/g, "")}">
+${head}
 ${tokenSheets(dataRoot, ds.name).map((s) => `<style data-od-tokens="${s.name}">${inlineStyle(s.css)}</style>`).join("\n")}
 <style data-od-css>${inlineStyle(css)}</style>
-<script type="application/json" id="od-page">${JSON.stringify(meta).replace(/</g, "\\u003c")}</script>
 </head>
 <body>
 <div id="od-root"></div>
@@ -343,13 +379,10 @@ ${tokenSheets(dataRoot, ds.name).map((s) => `<style data-od-tokens="${s.name}">$
 ${bundles.map((b) => `<script>${inlineScript(b.js)}</script>`).join("\n")}
 </body>
 </html>
-`;
-  const path = resolve(outPath ?? join(dataRoot, ".build", "single", design, `${pageId}.html`));
-  const file = injectBridge(doc, readFileSync(BRIDGE, "utf8"));
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, file);
-  return { path, size: Buffer.byteLength(file), design, page: pageId, variant: variants[0].id, variants: variants.map((v) => v.id) };
+`);
 }
+
+const escapeId = (id) => String(id).replace(/[&"<>]/g, "");
 
 function errorPage(err) {
   const text = (err.errors?.length ? err.errors.map((e) => `${e.location ? `${e.location.file}:${e.location.line}: ` : ""}${e.text}`).join("\n") : err.message)
